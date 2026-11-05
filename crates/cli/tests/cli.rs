@@ -441,3 +441,173 @@ fn sandbox_check_reports_capabilities() {
         "{out}"
     );
 }
+
+#[test]
+fn export_then_apply_moves_a_setup_to_another_library() {
+    let a = tempfile::tempdir().unwrap();
+    add_probe(a.path());
+    assert!(
+        run(
+            a.path(),
+            &[
+                "sandbox",
+                "set",
+                "probe",
+                "--level",
+                "strict",
+                "--network",
+                "true"
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        run(
+            a.path(),
+            &["launch", "set", "probe", "--preset", "x11", "--env", "A=1"]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        run(
+            a.path(),
+            &[
+                "launch",
+                "set",
+                "probe",
+                "--profile",
+                "debug",
+                "--preset",
+                "debug"
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        run(a.path(), &["policy", "probe", "manual"])
+            .status
+            .code()
+            .is_some()
+    );
+    assert!(
+        run(
+            a.path(),
+            &["launch", "hook", "set", "probe", "post-update", "echo hi"]
+        )
+        .status
+        .success()
+    );
+
+    let file = a.path().join("setup.toml");
+    let o = run(a.path(), &["export", "-o", file.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains("id = \"probe\"") && text.contains("level = \"strict\""),
+        "{text}"
+    );
+
+    // Another machine: same app file available locally; apply adds nothing for it, so we point
+    // the entry at the file.
+    let b = tempfile::tempdir().unwrap();
+    let img = b.path().join("Probe.AppImage");
+    fs::copy(a.path().join("Applications/Probe.AppImage"), &img).unwrap();
+    let edited = text.replace(
+        "id = \"probe\"",
+        &format!("id = \"probe\"\nfile = \"{}\"", img.display()),
+    );
+    let file_b = b.path().join("setup.toml");
+    fs::write(&file_b, edited).unwrap();
+
+    let o = run(b.path(), &["apply", file_b.to_str().unwrap(), "--dry-run"]);
+    assert!(stdout(&o).contains("add from file"), "{}", stdout(&o));
+    assert!(
+        stdout(&run(b.path(), &["list"])).contains("No apps yet"),
+        "dry run changes nothing"
+    );
+
+    let o = run(b.path(), &["apply", file_b.to_str().unwrap()]);
+    assert!(o.status.success(), "{}{}", stdout(&o), err(&o));
+    assert!(
+        stdout(&o).contains("probe: added from file"),
+        "{}",
+        stdout(&o)
+    );
+
+    let shown = stdout(&run(b.path(), &["sandbox", "show", "probe"]));
+    assert!(
+        shown.contains("level:    custom") && shown.contains("network:  on"),
+        "{shown}"
+    );
+    let preview = stdout(&run(b.path(), &["run", "--print", "probe"]));
+    assert!(
+        preview.contains("A=1") || preview.contains("--setenv A 1"),
+        "{preview}"
+    );
+    let desktop = fs::read_to_string(
+        b.path()
+            .join("data/applications/appofholding-probe.desktop"),
+    )
+    .unwrap();
+    assert!(
+        desktop.contains("appofholding-debug"),
+        "the extra profile became a menu action: {desktop}"
+    );
+    assert!(stdout(&run(b.path(), &["launch", "hook", "show", "probe"])).contains("echo hi"));
+
+    // Exporting from B gives back an equivalent file (apart from the local file path).
+    let again = stdout(&run(b.path(), &["export"]));
+    assert!(
+        again.contains("id = \"probe\"") && again.contains("level = \"strict\""),
+        "{again}"
+    );
+    // Applying twice is harmless.
+    assert!(
+        run(b.path(), &["apply", file_b.to_str().unwrap()])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn apply_rejects_bad_files_with_a_clear_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let f = tmp.path().join("bad.toml");
+    fs::write(&f, "version = 1\n[[app]]\nid = \"a\"\npolcy = \"x\"\n").unwrap();
+    let o = run(tmp.path(), &["apply", f.to_str().unwrap()]);
+    assert!(
+        !o.status.success() && err(&o).contains("polcy"),
+        "{}",
+        err(&o)
+    );
+    let o = run(tmp.path(), &["apply", "/nonexistent/file.toml"]);
+    assert!(err(&o).contains("cannot read"));
+}
+
+#[test]
+fn completions_and_man_pages_are_generated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bash = stdout(&run(tmp.path(), &["completions", "bash"]));
+    assert!(
+        bash.contains("_appofholding") && bash.contains("sandbox"),
+        "completion script looks wrong"
+    );
+    let dir = tmp.path().join("man");
+    assert!(
+        run(tmp.path(), &["man", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let main = fs::read_to_string(dir.join("appofholding.1")).unwrap();
+    assert!(
+        main.contains(".TH appofholding 1"),
+        "{}",
+        &main[..200.min(main.len())]
+    );
+    assert!(
+        dir.join("appofholding-sandbox.1").exists() && dir.join("appofholding-export.1").exists()
+    );
+}

@@ -40,7 +40,12 @@ Kirigami.ApplicationWindow {
         pageStack.push(Qt.resolvedUrl("AppPage.qml"), {appId: id})
     }
 
-    Component.onCompleted: reload()
+    Component.onCompleted: {
+        reload()
+        // Files handed to us by the desktop (double-click, "Open with", drag onto the icon).
+        var files = Util.parse(backend.startupFiles())
+        for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i], "", "")
+    }
 
     Connections {
         target: backend

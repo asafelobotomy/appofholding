@@ -1,0 +1,45 @@
+# Maintainer: <your name> <you@example.com>
+#
+# Builds from the repository checkout this file lives in (packaging/arch/ inside the source tree):
+#     cd packaging/arch && makepkg -si
+# For the AUR, replace the local build with a release tarball:
+#     source=("$pkgname-$pkgver.tar.gz::<release URL>")  and  cd "$pkgname-$pkgver"  in each function.
+
+pkgname=appofholding
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='AppImage manager: menu integration, updates, launch options and sandboxing'
+arch=(x86_64 aarch64)
+url='https://example.invalid/appofholding'
+license=(GPL-3.0-or-later)
+depends=(gcc-libs glibc bubblewrap xdg-dbus-proxy qt6-base qt6-declarative qt6-svg kirigami
+         qqc2-desktop-style hicolor-icon-theme)
+makedepends=(cargo cmake)
+optdepends=('zsync: delta updates for AppImages that publish .zsync files'
+            'libnotify: desktop notifications from the background updater')
+options=(!lto)
+
+_root() { echo "$startdir/../.."; }
+
+prepare() {
+  cd "$(_root)"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$(_root)"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --release --locked --workspace
+}
+
+check() {
+  cd "$(_root)"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --release --locked --workspace
+}
+
+package() {
+  cd "$(_root)"
+  make install PREFIX=/usr DESTDIR="$pkgdir" PROFILE=release CARGOFLAGS=--locked
+}

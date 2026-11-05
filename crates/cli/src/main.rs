@@ -5,6 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use appofholding_core::assets::{self, Arch, Selection};
 use appofholding_core::check::{self, Report};
+use appofholding_core::config::{ApplyOptions as ConfigApply, Config, Note};
 use appofholding_core::desktop;
 use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
 use appofholding_core::http::UreqHttp;
@@ -17,7 +18,7 @@ use appofholding_core::source::Policy;
 use appofholding_core::source::{self, Channel, Source};
 use appofholding_core::version::{Installed, Status};
 use appofholding_core::{AddOptions, Dirs, Install, Library, inspect};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
 #[derive(Parser)]
@@ -106,6 +107,31 @@ enum Cmd {
     /// Install or remove the systemd timer that checks for updates in the background.
     #[command(subcommand)]
     Schedule(ScheduleCmd),
+    /// Write everything you have set up (sources, policies, launch profiles, sandboxes, hooks)
+    /// to a portable TOML file.
+    Export {
+        /// Write to this file instead of the terminal.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Make the library match a configuration file (see `export`). Safe to run repeatedly.
+    Apply {
+        file: PathBuf,
+        /// Do not download apps that are missing.
+        #[arg(long)]
+        no_install: bool,
+        /// Also remove extra launch profiles, hooks and sandboxes the file does not mention.
+        #[arg(long)]
+        prune: bool,
+        /// Only show what would be done.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Print a shell completion script (bash, zsh, fish, elvish, powershell).
+    Completions { shell: clap_complete::Shell },
+    /// Write man pages into a directory.
+    #[command(hide = true)]
+    Man { dir: PathBuf },
     /// Run an app inside a bubblewrap sandbox with limited access to your files, network, etc.
     #[command(subcommand)]
     Sandbox(SandboxCmd),
@@ -1123,6 +1149,82 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Sandbox(cmd) => sandbox_cmd(cmd)?,
+        Cmd::Export { output } => {
+            let text = library()?.export_config()?.to_toml()?;
+            match output {
+                Some(p) => {
+                    std::fs::write(&p, text)
+                        .with_context(|| format!("cannot write {}", p.display()))?;
+                    eprintln!("Wrote {}", p.display());
+                }
+                None => print!("{text}"),
+            }
+        }
+        Cmd::Apply {
+            file,
+            no_install,
+            prune,
+            dry_run,
+        } => {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("cannot read {}", file.display()))?;
+            let cfg = Config::parse(&text)?;
+            let lib = library()?;
+            if dry_run {
+                for a in &cfg.apps {
+                    let what = if lib.get(&a.id).is_ok() {
+                        "configure"
+                    } else if a.file.is_some() {
+                        "add from file, then configure"
+                    } else if a.source.is_some() && !no_install {
+                        "download, then configure"
+                    } else {
+                        "SKIP (not installed, nothing says how to get it)"
+                    };
+                    println!("{:<24} {what}", a.id);
+                }
+                return Ok(());
+            }
+            let mut failed = false;
+            for n in lib.apply_config(&UreqHttp::new(), &cfg, &ConfigApply { no_install, prune }) {
+                match n {
+                    Note::Installed(id) => println!("{id}: downloaded and installed"),
+                    Note::Added(id) => println!("{id}: added from file"),
+                    Note::Configured(id) => println!("{id}: configured"),
+                    Note::Missing { id, reason } => println!("{id}: skipped ({reason})"),
+                    Note::Failed { id, error } => {
+                        failed = true;
+                        println!("{id}: FAILED: {error}");
+                    }
+                }
+            }
+            print_warnings(&lib);
+            if failed {
+                bail!("some entries could not be applied");
+            }
+        }
+        Cmd::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "appofholding",
+                &mut std::io::stdout(),
+            );
+        }
+        Cmd::Man { dir } => {
+            std::fs::create_dir_all(&dir)?;
+            let cmd = Cli::command();
+            let render = |c: clap::Command, name: String| -> Result<()> {
+                let mut buf = Vec::new();
+                clap_mangen::Man::new(c).render(&mut buf)?;
+                std::fs::write(dir.join(format!("{name}.1")), buf)?;
+                Ok(())
+            };
+            render(cmd.clone(), "appofholding".into())?;
+            for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
+                render(sub.clone(), format!("appofholding-{}", sub.get_name()))?;
+            }
+        }
         Cmd::Source(cmd) => source_cmd(cmd)?,
         Cmd::Check { id } => {
             let lib = library()?;

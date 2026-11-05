@@ -43,6 +43,10 @@ pub mod qobject {
         #[cxx_name = "dataDir"]
         #[qinvokable]
         fn data_dir(self: &Backend) -> QString;
+        /// Files passed on the command line (e.g. by double-clicking an AppImage), as a JSON array.
+        #[cxx_name = "startupFiles"]
+        #[qinvokable]
+        fn startup_files(self: &Backend) -> QString;
 
         // ---- changes: "" on success, otherwise the error message
         #[cxx_name = "saveProfile"]
@@ -179,6 +183,15 @@ impl qobject::Backend {
             .map(|d| d.library_dir.display().to_string())
             .unwrap_or_default();
         q(&d)
+    }
+
+    pub fn startup_files(&self) -> QString {
+        let files: Vec<String> = std::env::args()
+            .skip(1)
+            .filter(|a| !a.starts_with('-'))
+            .map(|a| a.strip_prefix("file://").unwrap_or(&a).to_string())
+            .collect();
+        q(&json!(files).to_string())
     }
 
     pub fn save_profile(&self, id: &QString, name: &QString, json: &QString) -> QString {

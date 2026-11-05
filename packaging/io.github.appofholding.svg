@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b8def"/>
+      <stop offset="1" stop-color="#2b4fb8"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- a cinched pouch that holds an app window -->
+  <path d="M47 58 C26 72 24 100 34 108 Q64 119 94 108 C104 100 102 72 81 58 Z" fill="#ffffff" opacity="0.96"/>
+  <rect x="43" y="51" width="42" height="10" rx="5" fill="#cfdcff"/>
+  <path d="M56 51 C50 38 44 36 40 40 C44 46 50 50 56 51 Z" fill="#cfdcff"/>
+  <path d="M72 51 C78 38 84 36 88 40 C84 46 78 50 72 51 Z" fill="#cfdcff"/>
+  <rect x="48" y="73" width="32" height="24" rx="4" fill="#2b4fb8"/>
+  <rect x="48" y="73" width="32" height="7" rx="3.5" fill="#7aa2ff"/>
+  <circle cx="53.5" cy="76.5" r="1.5" fill="#ffffff"/>
+  <circle cx="59" cy="76.5" r="1.5" fill="#ffffff"/>
+  <circle cx="64.5" cy="76.5" r="1.5" fill="#ffffff"/>
+</svg>

@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod check;
+pub mod config;
 pub mod db;
 pub mod delta;
 pub mod desktop;
