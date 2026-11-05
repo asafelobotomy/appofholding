@@ -448,6 +448,7 @@ impl Library {
             appimage_type: ins.image.kind,
             update_info: ins.image.update_info.clone(),
             added_at: app.added_at,
+            external_file: app.external_file,
         };
         self.db.update_app(&rec)?;
         if !have_backup {

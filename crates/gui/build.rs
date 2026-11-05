@@ -10,18 +10,25 @@ fn main() {
                     "qml/AppsPage.qml",
                     "qml/AppCard.qml",
                     "qml/AppPage.qml",
+                    "qml/OverviewTab.qml",
                     "qml/SourceSection.qml",
                     "qml/LaunchSection.qml",
                     "qml/SandboxSection.qml",
                     "qml/AddDialog.qml",
+                    "qml/ImportDialog.qml",
                     "qml/SettingsPage.qml",
                     "qml/Section.qml",
+                    "qml/Pill.qml",
+                    "qml/PrimaryButton.qml",
+                    "qml/AppTile.qml",
+                    "qml/SectionCard.qml",
                 ]
                 .map(QmlFile::from)
                 .into_iter()
                 .chain([QmlFile::from("qml/Util.qml").singleton(true)]),
             ),
     )
+    .qrc("qml/resources/resources.qrc")
     .qt_module("Quick")
     .qt_module("QuickControls2")
     .file("src/backend.rs")

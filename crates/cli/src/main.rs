@@ -1,5 +1,5 @@
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -9,6 +9,7 @@ use appofholding_core::config::{ApplyOptions as ConfigApply, Config, Note};
 use appofholding_core::desktop;
 use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
 use appofholding_core::http::UreqHttp;
+use appofholding_core::import;
 use appofholding_core::launch;
 use appofholding_core::notify::NotifySend;
 use appofholding_core::profiles::{self, LaunchCtx};
@@ -18,7 +19,7 @@ use appofholding_core::selfupdate;
 use appofholding_core::source::Policy;
 use appofholding_core::source::{self, Channel, Source};
 use appofholding_core::version::{Installed, Status};
-use appofholding_core::{AddOptions, Dirs, Install, Library, inspect};
+use appofholding_core::{AddOptions, Dirs, FilePolicy, Install, Library, inspect};
 use clap::{CommandFactory, Parser, Subcommand};
 
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
@@ -56,12 +57,16 @@ enum Cmd {
     List,
     /// Show details about an AppImage file or a library app id.
     Info { target: String },
-    /// Remove an app: its menu entry, icon and (unless --keep-file) the AppImage.
+    /// Remove an app: its menu entry, icon and the AppImage (but see --keep-file; an AppImage that
+    /// was imported in place is your file and is kept unless you add --delete-file).
     Remove {
         id: String,
         /// Keep the AppImage file on disk.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "delete_file")]
         keep_file: bool,
+        /// Delete the AppImage file even if it was imported in place.
+        #[arg(long)]
+        delete_file: bool,
         /// Also delete the app's private sandbox home (its settings and files). Cannot be undone.
         #[arg(long)]
         purge_data: bool,
@@ -136,6 +141,9 @@ enum Cmd {
     /// Write man pages into a directory.
     #[command(hide = true)]
     Man { dir: PathBuf },
+    /// Find AppImages already on this computer and import them. Shows the whole plan first
+    /// (nothing changes until you confirm).
+    Import(ImportArgs),
     /// Run an app inside a bubblewrap sandbox with limited access to your files, network, etc.
     #[command(subcommand)]
     Sandbox(SandboxCmd),
@@ -205,6 +213,325 @@ enum SandboxCmd {
     Gc,
     /// Check that this machine can run sandboxes (bubblewrap, user namespaces, D-Bus proxy).
     Check,
+}
+
+#[derive(clap::Args)]
+#[command(args_conflicts_with_subcommands = true)]
+struct ImportArgs {
+    #[command(subcommand)]
+    action: Option<ImportAction>,
+    /// Also look in this folder (repeatable).
+    #[arg(long = "dir")]
+    dirs: Vec<PathBuf>,
+    /// Look only in the --dir folders, not the usual places.
+    #[arg(long)]
+    only_dirs: bool,
+    /// How to bring in loose and tool-integrated files: in-place (leave them), copy, or move
+    /// them into the library folder. Default: leave them, except files in Downloads/Desktop
+    /// which are moved. AppImages an app manages itself always stay where they are.
+    #[arg(long)]
+    mode: Option<String>,
+    /// Back up the menu entries other tools (Gear Lever, AppImageLauncher...) made for these
+    /// AppImages, so each app appears once. Undo with `appofholding import restore`.
+    #[arg(long)]
+    replace_entries: bool,
+    /// Import only these (names, ids or the numbers shown in the plan), comma separated.
+    #[arg(long, value_delimiter = ',')]
+    only: Vec<String>,
+    /// Leave these out (names, ids or numbers).
+    #[arg(long, value_delimiter = ',')]
+    exclude: Vec<String>,
+    /// Also import the ones needing a decision, under the suggested different id.
+    #[arg(long)]
+    include_conflicts: bool,
+    /// Show the plan and stop; change nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Do not ask for confirmation.
+    #[arg(short, long)]
+    yes: bool,
+}
+
+#[derive(Subcommand)]
+enum ImportAction {
+    /// Put back menu entries that `import --replace-entries` backed up.
+    Restore {
+        /// Which backup (see --list); default: the newest.
+        batch: Option<String>,
+        /// Only list the backups.
+        #[arg(long)]
+        list: bool,
+    },
+}
+
+/// What the user answered at the confirmation prompt.
+#[derive(Debug, PartialEq, Eq)]
+enum Answer {
+    No,
+    /// Everything that is currently selected.
+    Selected,
+    /// Exactly these plan numbers (1-based).
+    Numbers(Vec<usize>),
+}
+
+fn parse_answer(text: &str, count: usize) -> Answer {
+    let t = text.trim().to_lowercase();
+    if t == "y" || t == "yes" {
+        return Answer::Selected;
+    }
+    if t.is_empty() || t == "n" || t == "no" {
+        return Answer::No;
+    }
+    let nums: Option<Vec<usize>> = t
+        .split([',', ' '])
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<usize>().ok().filter(|n| (1..=count).contains(n)))
+        .collect();
+    match nums {
+        Some(v) if !v.is_empty() => Answer::Numbers(v),
+        _ => Answer::No,
+    }
+}
+
+fn short(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+fn import_cmd(args: ImportArgs) -> Result<()> {
+    let lib = library()?;
+    let home = PathBuf::from(std::env::var_os("HOME").context("$HOME is not set")?);
+    if let Some(ImportAction::Restore { batch, list }) = args.action {
+        let backups = import::list_backups(&lib);
+        if backups.is_empty() {
+            println!("No menu entries are backed up.");
+            return Ok(());
+        }
+        if list {
+            for b in &backups {
+                println!(
+                    "{}: {}",
+                    b.batch,
+                    b.files
+                        .iter()
+                        .map(|f| short(f, &home))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            return Ok(());
+        }
+        let batch = batch.unwrap_or_else(|| backups[0].batch.clone());
+        let restored = import::restore(&lib, &batch)?;
+        for r in &restored {
+            println!("Restored {}", short(r, &home));
+        }
+        if restored.is_empty() {
+            println!(
+                "Nothing restored (the original files are in the way, or the backup is gone)."
+            );
+        }
+        return Ok(());
+    }
+
+    let mode = match args.mode.as_deref() {
+        None => None,
+        Some("in-place" | "inplace") => Some(Install::InPlace),
+        Some("copy") => Some(Install::Copy),
+        Some("move") => Some(Install::Move),
+        Some(other) => bail!("--mode must be in-place, copy or move (not '{other}')"),
+    };
+    let scan_opts = import::ScanOptions {
+        extra_dirs: args.dirs.clone(),
+        only_extra: args.only_dirs,
+        ..import::ScanOptions::new(&home)
+    };
+    println!("Looking for AppImages...");
+    let scan = import::scan(&lib, &scan_opts)?;
+    let plan = import::plan(
+        &lib,
+        &scan,
+        &home,
+        &import::PlanOptions {
+            mode,
+            replace_entries: args.replace_entries,
+        },
+    )?;
+    println!(
+        "Searched: {}",
+        scan.searched
+            .iter()
+            .map(|d| short(d, &home))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // Which items are selected by default / by the filters.
+    let matches = |item: &import::Item, n: usize, list: &[String]| {
+        list.iter().any(|w| {
+            let w = w.trim().to_lowercase();
+            w == item.id
+                || w == item.found.name.to_lowercase()
+                || w.parse::<usize>().ok() == Some(n)
+        })
+    };
+    let mut selected: Vec<usize> = Vec::new();
+    for (i, item) in plan.items.iter().enumerate() {
+        let n = i + 1;
+        let base = match &item.action {
+            import::Action::Import => true,
+            import::Action::Conflict { .. } => args.include_conflicts,
+            import::Action::Skip(_) => false,
+        };
+        let wanted = if args.only.is_empty() {
+            base
+        } else {
+            matches(item, n, &args.only)
+        };
+        if wanted
+            && !matches(item, n, &args.exclude)
+            && !matches!(item.action, import::Action::Skip(_))
+        {
+            selected.push(i);
+        }
+    }
+
+    println!();
+    if plan.items.is_empty() {
+        println!("No importable AppImages found.");
+    } else {
+        println!("Found {} AppImage(s):\n", plan.items.len());
+    }
+    for (i, item) in plan.items.iter().enumerate() {
+        let f = &item.found;
+        let mark = if selected.contains(&i) { "[x]" } else { "[ ]" };
+        let owner = match &f.owner {
+            import::Owner::Loose => "loose file".to_string(),
+            import::Owner::Tool { tool, .. } => format!("integrated by {tool}"),
+            import::Owner::Entry { .. } => "has its own menu entry".to_string(),
+            import::Owner::App { .. } => "kept by the app itself".to_string(),
+        };
+        println!(
+            "{:>3} {mark} {}{}  ({}, {})",
+            i + 1,
+            f.name,
+            f.version
+                .as_deref()
+                .map(|v| format!(" {v}"))
+                .unwrap_or_default(),
+            owner,
+            Utf8Size(f.size)
+        );
+        println!("        {}", short(&f.path, &home));
+        match &item.action {
+            import::Action::Import => {}
+            import::Action::Conflict { reason, alt_id } => println!(
+                "        needs a decision: {reason}; --include-conflicts imports it as '{alt_id}'"
+            ),
+            import::Action::Skip(why) => println!("        not importable: {why}"),
+        }
+        for n in &item.notes {
+            println!("        - {n}");
+        }
+    }
+    if !scan.skipped.is_empty() {
+        println!("\nNot offered ({}):", scan.skipped.len());
+        for (p, why) in &scan.skipped {
+            println!("  {}  -- {why}", short(p, &home));
+        }
+    }
+    println!();
+    if selected.is_empty() {
+        println!("Nothing selected to import.");
+        return Ok(());
+    }
+    println!(
+        "{} of {} selected for import.",
+        selected.len(),
+        plan.items.len()
+    );
+    if args.dry_run {
+        println!("Dry run: nothing was changed.");
+        return Ok(());
+    }
+
+    use std::io::{BufRead, IsTerminal, Write};
+    if !args.yes {
+        if !std::io::stdin().is_terminal() {
+            println!(
+                "Nothing was changed. Re-run with --yes to import the selected apps (or --dry-run to only look)."
+            );
+            return Ok(());
+        }
+        print!(
+            "Import the {} selected app(s)? [y/N, or numbers like 1,3 to choose] ",
+            selected.len()
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        match parse_answer(&line, plan.items.len()) {
+            Answer::No => {
+                println!("Nothing was changed.");
+                return Ok(());
+            }
+            Answer::Selected => {}
+            Answer::Numbers(nums) => {
+                selected = nums
+                    .into_iter()
+                    .map(|n| n - 1)
+                    .filter(|i| !matches!(plan.items[*i].action, import::Action::Skip(_)))
+                    .collect();
+            }
+        }
+    }
+
+    println!();
+    let mut failed = 0;
+    let results = import::execute(&lib, &plan, &selected);
+    for r in &results {
+        match &r.outcome {
+            Ok(notes) => println!("OK     {}  ({})", r.id, notes.join("; ")),
+            Err(e) => {
+                failed += 1;
+                println!("FAILED {}  {}", short(&r.path, &home), e);
+            }
+        }
+    }
+    println!(
+        "\nImported {} of {}.",
+        results.len() - failed,
+        results.len()
+    );
+    if plan.items.iter().enumerate().any(|(i, it)| {
+        selected.contains(&i)
+            && matches!(it.found.owner, import::Owner::Tool { .. })
+            && it.replace_entries.is_empty()
+    }) {
+        println!(
+            "Some apps now have two menu entries (yours and the other tool's). Run again with --replace-entries to back up the other tool's entries."
+        );
+    }
+    print_warnings(&lib);
+    if failed > 0 {
+        bail!("{failed} app(s) could not be imported");
+    }
+    Ok(())
+}
+
+struct Utf8Size(u64);
+
+impl std::fmt::Display for Utf8Size {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mb = self.0 as f64 / (1024.0 * 1024.0);
+        if mb >= 1.0 {
+            write!(f, "{mb:.1} MiB")
+        } else {
+            write!(f, "{} KiB", self.0 / 1024)
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -1238,11 +1565,25 @@ fn main() -> Result<()> {
         Cmd::Remove {
             id,
             keep_file,
+            delete_file,
             purge_data,
         } => {
             let lib = library()?;
-            let rec = lib.remove(&id, keep_file)?;
+            let policy = if delete_file {
+                FilePolicy::Delete
+            } else if keep_file {
+                FilePolicy::Keep
+            } else {
+                FilePolicy::Auto
+            };
+            let rec = lib.remove_with(&id, policy)?;
             println!("Removed {} ({})", rec.name, rec.id);
+            if rec.appimage_path.exists() {
+                println!(
+                    "The AppImage file was kept: {}",
+                    rec.appimage_path.display()
+                );
+            }
             if purge_data {
                 if lib.purge_private_home(&id)? {
                     println!("Deleted its private data folder.");
@@ -1255,6 +1596,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Sandbox(cmd) => sandbox_cmd(cmd)?,
+        Cmd::Import(args) => import_cmd(args)?,
         Cmd::SelfUpdate(cmd) => self_cmd(cmd)?,
         Cmd::Export { output } => {
             let text = library()?.export_config()?.to_toml()?;
@@ -1518,4 +1860,36 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_answers() {
+        assert_eq!(parse_answer("y\n", 5), Answer::Selected);
+        assert_eq!(parse_answer(" YES ", 5), Answer::Selected);
+        for no in ["", "n", "no", "maybe", "0", "9", "1,x", "-1"] {
+            assert_eq!(parse_answer(no, 5), Answer::No, "{no:?}");
+        }
+        assert_eq!(parse_answer("1,3", 5), Answer::Numbers(vec![1, 3]));
+        assert_eq!(parse_answer("2 4", 5), Answer::Numbers(vec![2, 4]));
+        assert_eq!(parse_answer("5", 5), Answer::Numbers(vec![5]));
+    }
+
+    #[test]
+    fn paths_are_shortened_relative_to_home() {
+        assert_eq!(
+            short(
+                Path::new("/home/u/AppImages/a.AppImage"),
+                Path::new("/home/u")
+            ),
+            "~/AppImages/a.AppImage"
+        );
+        assert_eq!(
+            short(Path::new("/opt/a.AppImage"), Path::new("/home/u")),
+            "/opt/a.AppImage"
+        );
+    }
 }

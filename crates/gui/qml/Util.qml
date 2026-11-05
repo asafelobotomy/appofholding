@@ -24,6 +24,16 @@ QtObject {
         return new Date(unix * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
     }
 
+    // "5 minutes ago", "2 hours ago", "3 days ago"
+    function ago(unix) {
+        if (!unix) return qsTr("never checked")
+        var s = Math.max(0, Math.floor(Date.now() / 1000) - unix)
+        if (s < 90) return qsTr("just now")
+        if (s < 3600) return qsTr("%1 minutes ago").arg(Math.round(s / 60))
+        if (s < 86400) return qsTr("%1 hours ago").arg(Math.round(s / 3600))
+        return qsTr("%1 days ago").arg(Math.round(s / 86400))
+    }
+
     function statusLabel(status) {
         switch (status) {
         case "update-available": return qsTr("Update available")

@@ -51,6 +51,23 @@ fn icon_url(a: &AppRecord) -> String {
         .unwrap_or_default()
 }
 
+/// Where updates come from, short enough for a list row.
+fn short_source(p: &source::Provider) -> String {
+    let host = |url: &str| {
+        url.split("//")
+            .nth(1)
+            .and_then(|r| r.split('/').next())
+            .unwrap_or(url)
+            .to_string()
+    };
+    match p {
+        source::Provider::GitHub { owner, repo } => format!("github.com/{owner}/{repo}"),
+        source::Provider::GitLab { host, project } => format!("{host}/{project}"),
+        source::Provider::Forgejo { host, owner, repo } => format!("{host}/{owner}/{repo}"),
+        source::Provider::Url { url } | source::Provider::Zsync { url } => host(url),
+    }
+}
+
 pub fn list_apps(lib: &Library) -> Res<Value> {
     let sources = lib.sources().map_err(e)?;
     let mut out = Vec::new();
@@ -64,6 +81,8 @@ pub fn list_apps(lib: &Library) -> Res<Value> {
             "icon": icon_url(&a),
             "sandbox": sandbox.level.as_str(),
             "hasSource": src.is_some(),
+            "source": src.map(|s| short_source(&s.source.provider)),
+            "lastChecked": src.and_then(|s| s.last_checked),
             "status": src.and_then(|s| s.last_status.clone()).unwrap_or_default(),
             "latest": src.and_then(|s| s.last_latest.clone()),
             "error": src.and_then(|s| s.last_error.clone()),
@@ -106,6 +125,7 @@ pub fn app_detail(lib: &Library, id: &str) -> Res<Value> {
         "size": a.size,
         "sha256": a.sha256,
         "desktopFile": a.desktop_file.display().to_string(),
+        "externalFile": a.external_file,
         "icon": icon_url(&a),
         "running": !appofholding_core::running::running_pids(&a.appimage_path).is_empty(),
         "source": src.as_ref().map(|s| json!({
@@ -397,6 +417,129 @@ pub fn install_link(
         .install_from_source(http, parsed, &AddOptions::default(), progress)
         .map_err(e)?;
     Ok(json!({"id": rec.id, "name": rec.name}))
+}
+
+// ---- importing existing AppImages
+
+fn mode_from(text: &str) -> Res<Option<Install>> {
+    Ok(match text {
+        "" | "default" => None,
+        "in-place" => Some(Install::InPlace),
+        "copy" => Some(Install::Copy),
+        "move" => Some(Install::Move),
+        other => return Err(format!("unknown import mode '{other}'")),
+    })
+}
+
+fn mode_name(m: Install) -> &'static str {
+    match m {
+        Install::InPlace => "in-place",
+        Install::Copy => "copy",
+        Install::Move => "move",
+    }
+}
+
+fn import_plan_for(
+    lib: &Library,
+    home: &Path,
+    opts: &Value,
+) -> Res<(
+    appofholding_core::import::ImportPlan,
+    appofholding_core::import::Scan,
+)> {
+    use appofholding_core::import;
+    let scan = import::scan(lib, &import::ScanOptions::new(home)).map_err(e)?;
+    let plan = import::plan(
+        lib,
+        &scan,
+        home,
+        &import::PlanOptions {
+            mode: mode_from(str_of(opts, "mode"))?,
+            replace_entries: bool_of(opts, "replaceEntries"),
+        },
+    )
+    .map_err(e)?;
+    Ok((plan, scan))
+}
+
+/// Look for importable AppImages and say what importing each would do. Changes nothing.
+pub fn import_scan(lib: &Library, home: &Path, opts: &Value) -> Res<Value> {
+    use appofholding_core::import::{Action, Owner};
+    let (plan, scan) = import_plan_for(lib, home, opts)?;
+    let items: Vec<Value> = plan
+        .items
+        .iter()
+        .map(|i| {
+            let f = &i.found;
+            let (kind, tool) = match &f.owner {
+                Owner::Loose => ("loose", String::new()),
+                Owner::Tool { tool, .. } => ("tool", tool.clone()),
+                Owner::Entry { .. } => ("entry", String::new()),
+                Owner::App { .. } => ("app", String::new()),
+            };
+            let (action, reason, alt) = match &i.action {
+                Action::Import => ("import", String::new(), String::new()),
+                Action::Conflict { reason, alt_id } => ("conflict", reason.clone(), alt_id.clone()),
+                Action::Skip(why) => ("skip", why.clone(), String::new()),
+            };
+            json!({
+                "path": f.path.display().to_string(),
+                "name": f.name,
+                "version": f.version,
+                "size": f.size,
+                "id": i.id,
+                "owner": kind,
+                "tool": tool,
+                "action": action,
+                "reason": reason,
+                "altId": alt,
+                "mode": mode_name(i.mode),
+                "notes": i.notes,
+                "replaces": i.replace_entries.len(),
+                "updateSource": f.has_update_info,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "items": items,
+        "home": home.display().to_string(),
+        "searched": scan.searched.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        "skipped": scan.skipped.iter().map(|(p, why)| json!({"path": p.display().to_string(), "reason": why})).collect::<Vec<_>>(),
+    }))
+}
+
+/// Import the AppImages at `paths` (the user's final choice), planned with the same options
+/// that were shown. Conflicting ones go in under their suggested alternative id.
+pub fn import_run(lib: &Library, home: &Path, opts: &Value, paths: &[String]) -> Res<Value> {
+    let (plan, _) = import_plan_for(lib, home, opts)?;
+    let selected: Vec<usize> = plan
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| paths.iter().any(|p| Path::new(p) == i.found.path))
+        .map(|(n, _)| n)
+        .collect();
+    if selected.is_empty() {
+        return Err("nothing was selected".into());
+    }
+    let results = appofholding_core::import::execute(lib, &plan, &selected);
+    Ok(json!({
+        "results": results.iter().map(|r| match &r.outcome {
+            Ok(notes) => json!({"path": r.path.display().to_string(), "id": r.id, "ok": true, "notes": notes}),
+            Err(err) => json!({"path": r.path.display().to_string(), "id": r.id, "ok": false, "error": err}),
+        }).collect::<Vec<_>>(),
+        "imported": results.iter().filter(|r| r.outcome.is_ok()).count(),
+    }))
+}
+
+/// Put back the menu entries that the last import backed up.
+pub fn import_restore(lib: &Library) -> Res<Value> {
+    let backups = appofholding_core::import::list_backups(lib);
+    let Some(newest) = backups.first() else {
+        return Ok(json!({"restored": 0}));
+    };
+    let restored = appofholding_core::import::restore(lib, &newest.batch).map_err(e)?;
+    Ok(json!({"restored": restored.len()}))
 }
 
 fn self_json(s: &appofholding_core::selfupdate::SelfStatus) -> Value {
@@ -783,6 +926,97 @@ mod tests {
         std::fs::write(f.path(), b).unwrap();
         let _ = Stdio::null();
         appofholding_core::image::hash_file(f.path()).unwrap().0
+    }
+
+    #[test]
+    fn import_dialog_flow_scan_then_confirm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join("AppImages")).unwrap();
+        std::fs::write(
+            home.join("AppImages/Loose.AppImage"),
+            fixture::simple_appimage("Loose App", None),
+        )
+        .unwrap();
+        let gear = home.join("AppImages/gear.appimage");
+        std::fs::write(&gear, fixture::simple_appimage("Gear App", None)).unwrap();
+        let lib = Library::open(
+            Dirs::with_root(&tmp.path().join("lib")),
+            tmp.path().join("appofholding"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(lib.dirs.applications_dir()).unwrap();
+        std::fs::write(
+            lib.dirs.applications_dir().join("gear.desktop"),
+            format!("[Desktop Entry]\nType=Application\nName=Gear App\nExec=env DESKTOPINTEGRATION=1 {0}\nTryExec={0}\n", gear.display()),
+        )
+        .unwrap();
+
+        let opts = json!({"mode": "default", "replaceEntries": false});
+        let v = import_scan(&lib, &home, &opts).unwrap();
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let g = items.iter().find(|i| i["name"] == "Gear App").unwrap();
+        assert_eq!(
+            (
+                g["owner"].clone(),
+                g["tool"].clone(),
+                g["action"].clone(),
+                g["mode"].clone()
+            ),
+            (
+                json!("tool"),
+                json!("Gear Lever"),
+                json!("import"),
+                json!("in-place")
+            )
+        );
+        assert!(
+            g["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("appear twice"))
+        );
+        assert!(lib.list().unwrap().is_empty(), "scanning is a dry run");
+
+        // Changing the options changes the shown plan.
+        let with = import_scan(
+            &lib,
+            &home,
+            &json!({"mode": "copy", "replaceEntries": true}),
+        )
+        .unwrap();
+        let g = with["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "Gear App")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (g["mode"].clone(), g["replaces"].clone()),
+            (json!("copy"), json!(1))
+        );
+        assert!(import_scan(&lib, &home, &json!({"mode": "teleport"})).is_err());
+
+        // The final confirmation imports exactly what was chosen.
+        let r = import_run(&lib, &home, &opts, &[gear.display().to_string()]).unwrap();
+        assert_eq!(r["imported"], 1);
+        assert_eq!(
+            lib.list()
+                .unwrap()
+                .iter()
+                .map(|a| a.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["gear-app".to_string()]
+        );
+        assert!(
+            import_run(&lib, &home, &opts, &["/nonexistent".to_string()])
+                .unwrap_err()
+                .contains("nothing was selected")
+        );
+        assert_eq!(import_restore(&lib).unwrap()["restored"], 0);
     }
 
     #[test]

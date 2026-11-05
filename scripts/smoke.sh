@@ -45,7 +45,7 @@ cleanup() { stop_app; $B remove $ID --purge-data >/dev/null 2>&1; $B remove scal
 trap cleanup EXIT
 
 section "1. basics"
-expect "version"                  "appofholding 0\.1\.0"           $B --version
+expect "version"                  "appofholding [0-9]+\.[0-9]+\.[0-9]+" $B --version
 expect "sandbox prerequisites"    "sandboxes start:      yes"      $B sandbox check
 expect "empty library"            "No apps yet"                   $B list
 
@@ -59,6 +59,14 @@ check "menu entry validates"      desktop-file-validate "$D"
 ls ~/.local/share/icons/hicolor/*/apps/appofholding-$ID.* >/dev/null 2>&1 && ok "icon installed" || bad "icon" "missing"
 expect "listed"                   "$ID "                          $B list
 expect "adding twice is refused"  "already in the library"        $B add "$TMP/$NAME.AppImage"
+
+section "2b. import existing AppImages (dry run only: your real files are never touched)"
+BEFORE_ENTRIES=$(ls ~/.local/share/applications)
+o=$($B import --dry-run 2>&1); rc=$?
+[ $rc = 0 ] && ok "import --dry-run runs" || bad "import --dry-run" "exit $rc"
+echo "$o" | grep -q "Dry run: nothing was changed\|Nothing selected\|No importable" && ok "it stops after showing the plan" || bad "dry run stops" "$(echo "$o" | tail -2 | tr '\n' ' ')"
+echo "   ($(echo "$o" | grep -E '^Found|selected for import|No importable' | tr '\n' ' '))"
+[ "$(ls ~/.local/share/applications)" = "$BEFORE_ENTRIES" ] && ok "the dry run changed no menu entries" || bad "dry run changed menu entries" ""
 
 section "3. launch options"
 check "preset + env + prefix"     $B launch set $ID --preset electron-auto --env SMOKE=1 --prefix "nice -n 5"

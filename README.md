@@ -12,6 +12,9 @@ tool (`appofholding`) that share one library.
 
 - **Paste a link, get an app.** `appofholding add https://github.com/owner/repo` picks the right
   file for your CPU, downloads it, verifies its checksum, and adds it to the menu.
+- **Bring in what you already have.** `appofholding import` finds loose AppImages, ones other tools
+  (Gear Lever, AppImageLauncher) integrated and ones apps keep themselves, shows a dry-run plan,
+  and asks before changing anything ([docs/importing.md](docs/importing.md)).
 - **Updates you can trust.** Explicit status for every check (never a silent "checking…"), checksum
   and size verification, resumable downloads, rollback to previous versions, per-app policy
   (automatic / notify / manual / pinned), skip-this-version, and a background timer.
@@ -42,6 +45,7 @@ updates; `libnotify` (optional) for update notifications.
 ```bash
 appofholding add ~/Downloads/Foo.AppImage                # from a file
 appofholding add https://github.com/owner/repo           # from a link
+appofholding import --dry-run                            # find AppImages you already have
 appofholding list
 appofholding check                                       # look for updates
 appofholding update                                      # install them
@@ -67,6 +71,7 @@ Set `APPOFHOLDING_ROOT=/some/folder` to run everything inside a throwaway direct
 ## Documentation
 
 - [Making your AppImage updatable](docs/embedding-update-info.md) (for AppImage authors)
+- [Importing existing AppImages](docs/importing.md)
 - [Sandboxing](docs/sandbox.md)
 - [Configuration files](docs/configuration.md)
 - [Changelog](CHANGELOG.md)

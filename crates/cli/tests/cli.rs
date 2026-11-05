@@ -611,3 +611,220 @@ fn completions_and_man_pages_are_generated() {
         dir.join("appofholding-sandbox.1").exists() && dir.join("appofholding-export.1").exists()
     );
 }
+
+/// Like `run`, but with a pretend home folder to scan.
+fn run_home(root: &Path, home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_appofholding"))
+        .env("APPOFHOLDING_ROOT", root)
+        .env("HOME", home)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// A home folder with a loose AppImage, one integrated by Gear Lever, one in Downloads.
+fn import_fixture(root: &Path) -> std::path::PathBuf {
+    let home = root.join("home");
+    fs::create_dir_all(home.join("AppImages")).unwrap();
+    fs::create_dir_all(home.join("Downloads")).unwrap();
+    fs::write(
+        home.join("AppImages/Loose.AppImage"),
+        fixture::simple_appimage("Loose App", None),
+    )
+    .unwrap();
+    let gear = home.join("AppImages/gear.appimage");
+    fs::write(
+        &gear,
+        fixture::simple_appimage(
+            "Gear App",
+            Some("gh-releases-zsync|o|gear|latest|Gear-*.AppImage.zsync"),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        home.join("Downloads/Dl.AppImage"),
+        fixture::simple_appimage("Download App", None),
+    )
+    .unwrap();
+    let apps = root.join("data/applications");
+    fs::create_dir_all(&apps).unwrap();
+    fs::write(
+        apps.join("gear.desktop"),
+        format!("[Desktop Entry]\nType=Application\nName=Gear App\nExec=env DESKTOPINTEGRATION=1 {0} %U\nTryExec={0}\n", gear.display()),
+    )
+    .unwrap();
+    home
+}
+
+#[test]
+fn import_dry_run_shows_the_whole_plan_and_changes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let home = import_fixture(root);
+    let o = run_home(root, &home, &["import", "--dry-run"]);
+    let out = stdout(&o);
+    assert!(o.status.success(), "{out}{}", err(&o));
+    for want in [
+        "Found 3 AppImage",
+        "Gear App",
+        "integrated by Gear Lever",
+        "Loose App",
+        "loose file",
+        "Download App",
+        "moved into",
+        "menu entry stays",
+        "update source found inside",
+        "3 of 3 selected",
+        "Dry run: nothing was changed",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    assert!(stdout(&run(root, &["list"])).contains("No apps yet"));
+    assert!(
+        home.join("Downloads/Dl.AppImage").exists(),
+        "the file was not moved by a dry run"
+    );
+    assert!(
+        !root
+            .join("data/applications/appofholding-gear-app.desktop")
+            .exists()
+    );
+}
+
+#[test]
+fn import_without_a_terminal_asks_for_yes_instead_of_guessing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let home = import_fixture(root);
+    let o = run_home(root, &home, &["import"]);
+    assert!(o.status.success());
+    assert!(
+        stdout(&o).contains("Nothing was changed. Re-run with --yes"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(stdout(&run(root, &["list"])).contains("No apps yet"));
+}
+
+#[test]
+fn import_yes_imports_the_selection_and_respects_ownership() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let home = import_fixture(root);
+    let o = run_home(root, &home, &["import", "--yes", "--exclude", "Loose App"]);
+    let out = stdout(&o);
+    assert!(o.status.success(), "{out}{}", err(&o));
+    assert!(out.contains("Imported 2 of 2"), "{out}");
+    let list = stdout(&run(root, &["list"]));
+    assert!(
+        list.contains("gear-app") && list.contains("download-app") && !list.contains("loose-app"),
+        "{list}"
+    );
+
+    // Adopted in place / moved.
+    assert!(home.join("AppImages/gear.appimage").exists());
+    assert!(
+        !home.join("Downloads/Dl.AppImage").exists()
+            && root.join("Applications/Dl.AppImage").exists()
+    );
+    // Its embedded update source came along, and Gear Lever's entry was left alone.
+    assert!(stdout(&run(root, &["source", "show", "gear-app"])).contains("github.com/o/gear"));
+    assert!(root.join("data/applications/gear.desktop").exists());
+    assert!(out.contains("two menu entries"), "{out}");
+
+    // Removing an imported-in-place app keeps the user's file; --delete-file removes it.
+    let o = run(root, &["remove", "gear-app"]);
+    assert!(
+        stdout(&o).contains("The AppImage file was kept"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(home.join("AppImages/gear.appimage").exists());
+    // Importing again offers it again (it is no longer in the library) and nothing else.
+    let again = stdout(&run_home(root, &home, &["import", "--dry-run"]));
+    assert!(
+        again.contains("Found 2 AppImage")
+            && again.contains("Gear App")
+            && again.contains("Loose App"),
+        "{again}"
+    );
+    // Importing a second time, this one with deletion on removal.
+    assert!(
+        run_home(root, &home, &["import", "--yes", "--only", "gear-app"])
+            .status
+            .success()
+    );
+    assert!(
+        run(root, &["remove", "gear-app", "--delete-file"])
+            .status
+            .success()
+    );
+    assert!(!home.join("AppImages/gear.appimage").exists());
+}
+
+#[test]
+fn import_replace_entries_then_restore_puts_them_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let home = import_fixture(root);
+    let entry = root.join("data/applications/gear.desktop");
+    let original = fs::read_to_string(&entry).unwrap();
+    let o = run_home(
+        root,
+        &home,
+        &["import", "--yes", "--only", "gear-app", "--replace-entries"],
+    );
+    assert!(o.status.success(), "{}{}", stdout(&o), err(&o));
+    assert!(
+        stdout(&o).contains("backed up 1 other menu entry"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(!entry.exists(), "only appOFholding's entry remains");
+    assert!(
+        root.join("data/applications/appofholding-gear-app.desktop")
+            .exists()
+    );
+
+    let listed = stdout(&run_home(root, &home, &["import", "restore", "--list"]));
+    assert!(listed.contains("gear.desktop"), "{listed}");
+    let o = run_home(root, &home, &["import", "restore"]);
+    assert!(stdout(&o).contains("Restored"), "{}{}", stdout(&o), err(&o));
+    assert_eq!(fs::read_to_string(&entry).unwrap(), original);
+    assert!(
+        stdout(&run_home(root, &home, &["import", "restore"]))
+            .contains("No menu entries are backed up")
+    );
+}
+
+#[test]
+fn import_options_are_validated() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let home = import_fixture(root);
+    let o = run_home(root, &home, &["import", "--mode", "teleport", "--dry-run"]);
+    assert!(
+        !o.status.success() && err(&o).contains("--mode must be"),
+        "{}",
+        err(&o)
+    );
+    let o = run_home(
+        root,
+        &home,
+        &[
+            "import",
+            "--dry-run",
+            "--only-dirs",
+            "--dir",
+            home.join("Downloads").to_str().unwrap(),
+        ],
+    );
+    let out = stdout(&o);
+    assert!(
+        out.contains("Download App") && !out.contains("Loose App"),
+        "{out}"
+    );
+    let o = run_home(root, &home, &["import", "--dry-run", "--mode", "copy"]);
+    assert!(stdout(&o).contains("copied into"), "{}", stdout(&o));
+}

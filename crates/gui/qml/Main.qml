@@ -120,7 +120,7 @@ Kirigami.ApplicationWindow {
 
     globalDrawer: Kirigami.GlobalDrawer {
         title: "appOFholding"
-        titleIcon: "application-x-executable"
+        titleIcon: "qrc:/appofholding/app-icon.svg"
         isMenu: false
         actions: [
             Kirigami.Action {
@@ -139,6 +139,11 @@ Kirigami.ApplicationWindow {
                 onTriggered: fileDialog.open()
             },
             Kirigami.Action {
+                text: qsTr("Import existing AppImages…")
+                icon.name: "document-import"
+                onTriggered: importDialog.openDialog()
+            },
+            Kirigami.Action {
                 text: qsTr("Check for updates")
                 icon.name: "view-refresh"
                 enabled: !root.working
@@ -155,9 +160,11 @@ Kirigami.ApplicationWindow {
         ]
     }
 
+    pageStack.defaultColumnWidth: Kirigami.Units.gridUnit * 25
     pageStack.initialPage: AppsPage {}
 
     AddDialog { id: addDialog }
+    ImportDialog { id: importDialog }
 
     FileDialog {
         id: fileDialog
@@ -167,5 +174,6 @@ Kirigami.ApplicationWindow {
     }
 
     function openAddDialog() { addDialog.openDialog() }
+    function openImportDialog() { importDialog.openDialog() }
     function openFileDialog() { fileDialog.open() }
 }

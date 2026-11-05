@@ -20,6 +20,18 @@ pub enum Install {
     Copy,
     /// Move into the library directory.
     Move,
+    /// Adopt the file where it is. It stays the user's file: removing the app keeps it.
+    InPlace,
+}
+
+/// What `remove` does with the AppImage file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilePolicy {
+    /// Delete files the library owns; keep files that were adopted in place.
+    #[default]
+    Auto,
+    Keep,
+    Delete,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -242,8 +254,14 @@ impl Library {
         let file_name = source
             .file_name()
             .ok_or_else(|| Error::Other("source has no file name".into()))?;
-        let dest = lib_dir.join(file_name);
+        let dest = if opts.install == Install::InPlace {
+            source.clone()
+        } else {
+            lib_dir.join(file_name)
+        };
         let in_place = source == dest;
+        // Adopted from somewhere else: the file stays the user's.
+        let external = in_place && source.parent() != Some(lib_dir.as_path());
         if self.db.find_by_path(&dest)?.is_some() {
             return Err(Error::AlreadyAdded(dest.display().to_string()));
         }
@@ -259,6 +277,7 @@ impl Library {
             &source,
             &dest,
             in_place,
+            external,
             opts.install,
             sha256,
             size,
@@ -291,6 +310,7 @@ impl Library {
         source: &Path,
         dest: &Path,
         in_place: bool,
+        external: bool,
         install: Install,
         sha256: String,
         size: u64,
@@ -302,6 +322,8 @@ impl Library {
                     fs::copy(source, dest).map_err(Error::io(dest))?;
                     created.push(dest.to_path_buf());
                 }
+                // Adopted where it is: nothing to copy (and `in_place` is true, so unreachable).
+                Install::InPlace => {}
                 Install::Move => {
                     if fs::rename(source, dest).is_err() {
                         // Cross-device move.
@@ -334,6 +356,7 @@ impl Library {
             added_at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs() as i64),
+            external_file: external,
         };
         self.db.insert(&rec)?;
         Ok(rec)
@@ -383,10 +406,28 @@ impl Library {
 
     /// Remove the app: desktop entry, icon, database row, and (unless `keep_file`) the AppImage.
     pub fn remove(&self, id: &str, keep_file: bool) -> Result<AppRecord> {
+        self.remove_with(
+            id,
+            if keep_file {
+                FilePolicy::Keep
+            } else {
+                FilePolicy::Auto
+            },
+        )
+    }
+
+    /// Remove the app. With `FilePolicy::Auto` the AppImage file is deleted only if the library
+    /// owns it; a file that was adopted in place is the user's and stays.
+    pub fn remove_with(&self, id: &str, files: FilePolicy) -> Result<AppRecord> {
         let rec = self.get(id)?;
         let mut targets = vec![rec.desktop_file.clone()];
         targets.extend(rec.icon_file.clone());
-        if !keep_file {
+        let delete_file = match files {
+            FilePolicy::Delete => true,
+            FilePolicy::Keep => false,
+            FilePolicy::Auto => !rec.external_file,
+        };
+        if delete_file {
             targets.push(rec.appimage_path.clone());
         }
         for t in targets {

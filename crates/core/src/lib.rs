@@ -16,6 +16,7 @@ pub mod fixture;
 pub mod http;
 pub mod icon;
 pub mod image;
+pub mod import;
 pub mod launch;
 pub mod library;
 pub mod notify;
@@ -32,5 +33,5 @@ pub mod version;
 
 pub use db::{AppRecord, SourceRecord};
 pub use error::{Error, Result};
-pub use library::{AddOptions, Install, Library, inspect};
+pub use library::{AddOptions, FilePolicy, Install, Library, inspect};
 pub use paths::Dirs;

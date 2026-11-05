@@ -80,6 +80,8 @@ const MIGRATIONS: &[&str] = &[
         app_id   TEXT PRIMARY KEY REFERENCES apps(id) ON DELETE CASCADE,
         settings TEXT NOT NULL
      );",
+    // v6: apps adopted in place keep their file wherever the user had it
+    "ALTER TABLE apps ADD COLUMN external_file INTEGER NOT NULL DEFAULT 0;",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,9 @@ pub struct AppRecord {
     pub appimage_type: u8,
     pub update_info: Option<String>,
     pub added_at: i64,
+    /// The AppImage lives outside the library folder (adopted in place), so it is the user's
+    /// file and removing the app must not delete it unless asked to.
+    pub external_file: bool,
 }
 
 /// A saved update source plus what we last learned from it.
@@ -180,8 +185,8 @@ impl Db {
 
     pub fn insert(&self, a: &AppRecord) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO apps (id,name,appimage_path,desktop_file,icon_file,version,sha256,size,appimage_type,update_info,added_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO apps (id,name,appimage_path,desktop_file,icon_file,version,sha256,size,appimage_type,update_info,added_at,external_file)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 a.id,
                 a.name,
@@ -194,6 +199,7 @@ impl Db {
                 a.appimage_type,
                 a.update_info,
                 a.added_at,
+                a.external_file,
             ],
         )?;
         Ok(())
@@ -593,6 +599,7 @@ fn row_to_app(r: &Row<'_>) -> rusqlite::Result<AppRecord> {
         appimage_type: r.get("appimage_type")?,
         update_info: r.get("update_info")?,
         added_at: r.get("added_at")?,
+        external_file: r.get("external_file")?,
     })
 }
 
@@ -613,6 +620,7 @@ mod tests {
             appimage_type: 2,
             update_info: None,
             added_at: 1,
+            external_file: false,
         }
     }
 

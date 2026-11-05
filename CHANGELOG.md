@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Import: `appofholding import` / **Import existing AppImages…** scans the usual places and your
+  menu entries for loose AppImages, ones other tools integrated, and ones apps keep themselves;
+  shows a dry-run plan, asks for confirmation, can back up (and restore) other tools' menu
+  entries, and adopts files in place.
+- AppImages adopted in place are the user's files: removing the app keeps them unless
+  `--delete-file` is given.
+
 ## 0.2.0
 
 - Self-updater: `appofholding self check` / `self update` look at this project's GitHub releases.

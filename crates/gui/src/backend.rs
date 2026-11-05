@@ -87,12 +87,15 @@ pub mod qobject {
         #[cxx_name = "scheduleRemove"]
         #[qinvokable]
         fn schedule_remove(self: &Backend) -> QString;
+        #[cxx_name = "importRestore"]
+        #[qinvokable]
+        fn import_restore(self: &Backend) -> QString;
         #[cxx_name = "setHook"]
         #[qinvokable]
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: checkAll | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate
+        // kind: checkAll | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -276,6 +279,9 @@ impl qobject::Backend {
                 .and_then(|d| service::schedule_remove(&d)),
         )
     }
+    pub fn import_restore(&self) -> QString {
+        json_or_err(with_lib(service::import_restore))
+    }
     pub fn set_hook(&self, id: &QString, kind: &QString, command: &QString) -> QString {
         unit(with_lib(|l| {
             let (id, kind, cmd) = (s(id), s(kind), s(command));
@@ -352,6 +358,22 @@ fn run_task(
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),
         "addFile" => with_lib(|l| service::add_file(l, a)),
         // a = "force" to skip the cache
+        // a = options JSON {mode, replaceEntries}; b = JSON array of the chosen file paths
+        "importScan" => {
+            let opts: Value = serde_json::from_str(a).map_err(|e| e.to_string())?;
+            let home = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or("$HOME is not set")?;
+            with_lib(|l| service::import_scan(l, &home, &opts))
+        }
+        "importRun" => {
+            let opts: Value = serde_json::from_str(a).map_err(|e| e.to_string())?;
+            let paths: Vec<String> = serde_json::from_str(b).map_err(|e| e.to_string())?;
+            let home = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or("$HOME is not set")?;
+            with_lib(|l| service::import_run(l, &home, &opts, &paths))
+        }
         "selfCheck" => service::self_check(
             &http,
             appofholding_core::selfupdate::detect_current(),
