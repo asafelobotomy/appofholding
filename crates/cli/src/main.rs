@@ -1687,8 +1687,8 @@ fn main() -> Result<()> {
                     "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
             }
-            for i in ids {
-                match lib.check(&http, &i) {
+            for (i, result) in lib.check_many(&http, &ids) {
+                match result {
                     Ok(r) => match r.problem() {
                         Some(p) => println!("{i:<24} problem: {p}"),
                         None => println!(

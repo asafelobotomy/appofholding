@@ -105,6 +105,11 @@ impl Library {
         Ok(self.db.get_sandbox(id)?.unwrap_or_default())
     }
 
+    /// Saved sandbox settings for every app that has any, in one query.
+    pub fn all_sandbox_settings(&self) -> Result<std::collections::HashMap<String, Settings>> {
+        self.db.list_sandbox()
+    }
+
     pub fn set_sandbox(&self, id: &str, settings: &Settings) -> Result<Settings> {
         self.get(id)?;
         let s = settings.clone().normalized();

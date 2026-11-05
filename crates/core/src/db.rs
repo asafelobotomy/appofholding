@@ -154,6 +154,9 @@ impl Db {
     fn init(conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", true)?;
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        // The GUI, the CLI and the background timer share one file; wait for each other briefly
+        // instead of failing with "database is locked".
+        conn.busy_timeout(std::time::Duration::from_secs(10))?;
         let mut db = Db { conn };
         db.migrate()?;
         Ok(db)
@@ -466,6 +469,22 @@ impl Db {
                 .map_err(|e| Error::Other(format!("corrupt sandbox settings for {app_id}: {e}")))
         })
         .transpose()
+    }
+
+    /// Every app's saved sandbox settings in one query (apps without a row are absent).
+    pub fn list_sandbox(
+        &self,
+    ) -> Result<std::collections::HashMap<String, crate::sandbox::Settings>> {
+        let mut stmt = self.conn.prepare("SELECT app_id, settings FROM sandbox")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (id, json) = row?;
+            let s = serde_json::from_str(&json)
+                .map_err(|e| Error::Other(format!("corrupt sandbox settings for {id}: {e}")))?;
+            out.insert(id, s);
+        }
+        Ok(out)
     }
 
     pub fn put_sandbox(&self, app_id: &str, s: &crate::sandbox::Settings) -> Result<()> {

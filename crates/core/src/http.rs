@@ -42,6 +42,12 @@ pub struct UreqHttp {
     agent: ureq::Agent,
 }
 
+/// Small API answers (release lists, checksums) must arrive within this long.
+const API_BODY_TIMEOUT: Duration = Duration::from_secs(60);
+/// One download attempt gives up after this long, so a server that stalls mid-file cannot hang an
+/// update forever. The partial file is kept and the next attempt resumes where it stopped.
+const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
 const USER_AGENT: &str = concat!("appofholding/", env!("CARGO_PKG_VERSION"));
 
 impl Default for UreqHttp {
@@ -108,7 +114,12 @@ impl UreqHttp {
 
 impl Http for UreqHttp {
     fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response> {
-        let mut req = self.agent.get(url);
+        let mut req = self
+            .agent
+            .get(url)
+            .config()
+            .timeout_recv_body(Some(API_BODY_TIMEOUT))
+            .build();
         for (k, v) in headers {
             req = req.header(*k, *v);
         }
@@ -133,7 +144,12 @@ impl Http for UreqHttp {
         out: &mut dyn Write,
         progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<()> {
-        let mut req = self.agent.get(url);
+        let mut req = self
+            .agent
+            .get(url)
+            .config()
+            .timeout_recv_body(Some(DOWNLOAD_BODY_TIMEOUT))
+            .build();
         if offset > 0 {
             req = req.header("Range", format!("bytes={offset}-"));
         }
@@ -176,15 +192,15 @@ impl Http for UreqHttp {
 /// Canned-response HTTP client for tests.
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fake {
-    use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     use super::*;
 
     #[derive(Default)]
     pub struct FakeHttp {
         pub responses: HashMap<String, Response>,
-        pub requests: RefCell<Vec<String>>,
+        pub requests: Mutex<Vec<String>>,
         /// Pretend the server does not support Range requests.
         pub ignore_range: bool,
         /// Drop the connection after this many body bytes (first attempt semantics: applies to
@@ -230,7 +246,7 @@ pub mod fake {
             self
         }
         fn lookup(&self, url: &str) -> Result<Response> {
-            self.requests.borrow_mut().push(url.to_string());
+            self.requests.lock().unwrap().push(url.to_string());
             self.responses
                 .get(url)
                 .cloned()

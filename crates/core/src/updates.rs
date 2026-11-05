@@ -47,6 +47,47 @@ impl Library {
             .ok_or_else(|| Error::Other("internal: missing report".into()))
     }
 
+    /// Check several apps at once (a few at a time; each worker opens its own database
+    /// connection). Results come back in the order of `ids`.
+    pub fn check_many(
+        &self,
+        http: &(dyn Http + Sync),
+        ids: &[String],
+    ) -> Vec<(String, Result<Report>)> {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const WORKERS: usize = 4;
+        let (dirs, exec_bin) = (self.dirs.clone(), self.exec_bin.clone());
+        let next = AtomicUsize::new(0);
+        let out: Mutex<Vec<Option<Result<Report>>>> =
+            Mutex::new((0..ids.len()).map(|_| None).collect());
+        std::thread::scope(|scope| {
+            for _ in 0..WORKERS.min(ids.len()) {
+                scope.spawn(|| {
+                    let lib = Library::open(dirs.clone(), exec_bin.clone());
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(id) = ids.get(i) else { break };
+                        let r = match &lib {
+                            Ok(l) => l.check(http, id),
+                            Err(e) => Err(Error::Other(e.to_string())),
+                        };
+                        out.lock().unwrap()[i] = Some(r);
+                    }
+                });
+            }
+        });
+        let results = out.into_inner().unwrap();
+        ids.iter()
+            .cloned()
+            .zip(
+                results
+                    .into_iter()
+                    .map(|r| r.unwrap_or_else(|| Err(Error::Other("check did not run".into())))),
+            )
+            .collect()
+    }
+
     /// Install straight from a pasted link: resolve release, choose and download the asset,
     /// verify its checksum, integrate it and remember the source.
     pub fn install_from_source(

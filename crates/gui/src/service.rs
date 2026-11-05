@@ -69,11 +69,17 @@ fn short_source(p: &source::Provider) -> String {
 }
 
 pub fn list_apps(lib: &Library) -> Res<Value> {
-    let sources = lib.sources().map_err(e)?;
+    let sources: std::collections::HashMap<_, _> = lib
+        .sources()
+        .map_err(e)?
+        .into_iter()
+        .map(|s| (s.app_id.clone(), s))
+        .collect();
+    let sandboxes = lib.all_sandbox_settings().map_err(e)?;
     let mut out = Vec::new();
     for a in lib.list().map_err(e)? {
-        let src = sources.iter().find(|s| s.app_id == a.id);
-        let sandbox = lib.sandbox_settings(&a.id).map_err(e)?;
+        let src = sources.get(&a.id);
+        let sandbox = sandboxes.get(&a.id).cloned().unwrap_or_default();
         out.push(json!({
             "id": a.id,
             "name": a.name,
@@ -647,17 +653,23 @@ pub fn check_app(lib: &Library, http: &dyn appofholding_core::http::Http, id: &s
     Ok(json!({"status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem()}))
 }
 
-pub fn check_all(lib: &Library, http: &dyn appofholding_core::http::Http) -> Res<Value> {
-    let mut results = Vec::new();
-    for s in lib.sources().map_err(e)? {
-        let r = match lib.check(http, &s.app_id) {
+pub fn check_all(lib: &Library, http: &(dyn appofholding_core::http::Http + Sync)) -> Res<Value> {
+    let ids: Vec<String> = lib
+        .sources()
+        .map_err(e)?
+        .into_iter()
+        .map(|s| s.app_id)
+        .collect();
+    let results = lib
+        .check_many(http, &ids)
+        .into_iter()
+        .map(|(id, r)| match r {
             Ok(r) => {
-                json!({"id": s.app_id, "status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem()})
+                json!({"id": id, "status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem()})
             }
-            Err(err) => json!({"id": s.app_id, "error": err.to_string()}),
-        };
-        results.push(r);
-    }
+            Err(err) => json!({"id": id, "error": err.to_string()}),
+        })
+        .collect();
     Ok(Value::Array(results))
 }
 

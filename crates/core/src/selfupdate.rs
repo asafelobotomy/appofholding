@@ -533,13 +533,13 @@ mod tests {
         );
         let again = check_cached(&http, &d, pacman(), Arch::X86_64, false).unwrap();
         assert!(again.from_cache && again.update_available && again.latest == "99.0.0");
-        assert_eq!(http.requests.borrow().len(), 1);
+        assert_eq!(http.requests.lock().unwrap().len(), 1);
         assert!(
             !check_cached(&http, &d, pacman(), Arch::X86_64, true)
                 .unwrap()
                 .from_cache
         );
-        assert_eq!(http.requests.borrow().len(), 2);
+        assert_eq!(http.requests.lock().unwrap().len(), 2);
     }
 
     #[test]

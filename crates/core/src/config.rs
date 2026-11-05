@@ -586,10 +586,10 @@ mod tests {
         );
 
         // Applying again changes nothing and downloads nothing.
-        let before = http.requests.borrow().len();
+        let before = http.requests.lock().unwrap().len();
         let notes = fresh.apply_config(&http, &cfg, &ApplyOptions::default());
         assert_eq!(notes, vec![Note::Configured("foo-app".into())]);
-        assert_eq!(http.requests.borrow().len(), before);
+        assert_eq!(http.requests.lock().unwrap().len(), before);
         assert_eq!(fresh.export_config().unwrap(), again);
     }
 
