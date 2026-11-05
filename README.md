@@ -3,7 +3,8 @@
 appOFholding is an AppImage launcher/manager (a Gear Lever alternative): desktop integration, update-source
 tracking, auto-update, sandboxing and launch flags. See the project plan for the roadmap.
 
-Status: **Milestone 5 (sandbox)**. M5: optional bubblewrap sandbox per app (levels none / standard / strict,
+Status: **Milestone 6 (GUI)**. M6: a Qt 6 / Kirigami app (`appofholding-gui`, built with cxx-qt) with the app list, per-app
+updates / launch / sandbox pages, add-from-link and drag-and-drop, and background-check settings. M5 (sandbox): M5: optional bubblewrap sandbox per app (levels none / standard / strict,
 network, home, GPU, audio, devices, display, filtered session bus, shared folders), runs from an unpacked
 copy so no FUSE is needed, private persistent home. Tested against Electron, Qt and GTK/Tauri AppImages.
 M4 (launch model): M4: per-app launch profiles (args, env, prefix, working dir,
@@ -38,5 +39,6 @@ appofholding run <id> [args...]     # what generated menu entries call
 Set `APPOFHOLDING_ROOT=/some/dir` to run entirely inside a throwaway directory.
 
 ```
-cargo test --workspace
+cargo test --workspace      # the GUI crate needs Qt 6, Kirigami and cmake installed
+cargo run -p appofholding-gui
 ```

@@ -47,6 +47,15 @@ impl Dirs {
         })
     }
 
+    /// The real directories, or everything under `$APPOFHOLDING_ROOT` when that is set (used by
+    /// tests and for trying things out without touching your home directory).
+    pub fn detect() -> Result<Self> {
+        match std::env::var_os("APPOFHOLDING_ROOT") {
+            Some(root) if !root.is_empty() => Ok(Self::with_root(&PathBuf::from(root))),
+            _ => Self::from_env(),
+        }
+    }
+
     /// Everything under `root`; nothing touches the real home directory.
     pub fn with_root(root: &Path) -> Self {
         Self {

@@ -999,11 +999,7 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
 }
 
 fn dirs() -> Result<Dirs> {
-    // APPOFHOLDING_ROOT redirects everything into one directory (used by tests and for experiments).
-    match std::env::var_os("APPOFHOLDING_ROOT") {
-        Some(root) => Ok(Dirs::with_root(&PathBuf::from(root))),
-        None => Ok(Dirs::from_env()?),
-    }
+    Ok(Dirs::detect()?)
 }
 
 fn library() -> Result<Library> {

@@ -1,0 +1,24 @@
+[package]
+name = "appofholding-gui"
+description = "Qt/Kirigami interface for appOFholding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "appofholding-gui"
+path = "src/main.rs"
+
+[dependencies]
+appofholding-core = { path = "../core" }
+cxx = "1.0.205"
+cxx-qt = "0.10.0"
+cxx-qt-lib = { version = "0.10.0", features = ["qt_full"] }
+serde_json = "1"
+
+[build-dependencies]
+cxx-qt-build = "0.10.0"
+
+[dev-dependencies]
+appofholding-core = { path = "../core", features = ["fixtures"] }
+tempfile = "3.27.0"
