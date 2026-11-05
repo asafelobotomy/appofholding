@@ -1,0 +1,20 @@
+[package]
+name = "appimgr-core"
+description = "Core library for appimgr: AppImage parsing, library database, desktop integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Test helpers that build fake AppImages in memory (used by tests in other crates).
+fixtures = []
+
+[dependencies]
+backhand = "0.25.5"
+hex = "0.4.3"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"
