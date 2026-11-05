@@ -422,9 +422,10 @@ impl Library {
             self.set_source(&a.id, s)?;
         }
         if let Some(p) = policy
-            && self.source(&a.id)?.is_some() {
-                self.set_policy(&a.id, p)?;
-            }
+            && self.source(&a.id)?.is_some()
+        {
+            self.set_policy(&a.id, p)?;
+        }
         if let Some(s) = &sandbox {
             self.set_sandbox(&a.id, s)?;
         } else if a.sandbox.is_none() && opts.prune {

@@ -86,7 +86,10 @@ impl UreqHttp {
                 ))
             })
             .collect();
-        let body = if with_body {
+        // 304 and 204 never have a body. Servers still label a 304 with the original
+        // `Content-Encoding: gzip`, and trying to decompress nothing is an error: GitHub's
+        // "not modified" answers failed this way.
+        let body = if with_body && status != 304 && status != 204 {
             resp.into_body()
                 .with_config()
                 .limit(32 << 20)
@@ -283,5 +286,50 @@ pub mod fake {
             progress(r.body.len() as u64, Some(r.body.len() as u64));
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    /// Serve one canned raw HTTP response on localhost and return the URL.
+    fn serve_once(raw: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(raw);
+            }
+        });
+        format!("http://{addr}/x")
+    }
+
+    #[test]
+    fn a_304_labelled_gzip_has_no_body_to_decompress() {
+        // Exactly what GitHub sends for a conditional request that matched.
+        let url = serve_once(
+            b"HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\nETag: W/\"abc\"\r\nConnection: close\r\n\r\n",
+        );
+        let r = UreqHttp::new()
+            .get(&url, &[("If-None-Match", "W/\"abc\"")])
+            .unwrap();
+        assert_eq!(r.status, 304);
+        assert!(r.body.is_empty());
+        assert_eq!(r.header("etag"), Some("W/\"abc\""));
+    }
+
+    #[test]
+    fn ordinary_bodies_and_errors_still_work() {
+        let url =
+            serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+        let r = UreqHttp::new().get(&url, &[]).unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (200, b"hello".as_slice()));
+        let url =
+            serve_once(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        assert_eq!(UreqHttp::new().get(&url, &[]).unwrap().status, 404);
     }
 }
