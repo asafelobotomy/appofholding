@@ -16,9 +16,13 @@
       <li>Updates with checksums, rollback to previous versions, and per-app update policies</li>
       <li>Launch profiles, environment variables and ready-made fixes such as Wayland and no-sandbox</li>
       <li>Optional bubblewrap sandbox with a private home folder for each app</li>
+      <li>Import the AppImages you already have, with a full preview before anything changes</li>
       <li>A command line tool and a configuration file for repeatable setups</li>
     </ul>
   </description>
+  <developer id="io.github.asafelobotomy">
+    <name>asafelobotomy</name>
+  </developer>
   <url type="homepage">https://github.com/asafelobotomy/appofholding</url>
   <url type="bugtracker">https://github.com/asafelobotomy/appofholding/issues</url>
   <launchable type="desktop-id">io.github.appofholding.desktop</launchable>
@@ -31,6 +35,7 @@
   </categories>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.0" date="2026-11-05"/>
     <release version="0.2.0" date="2026-11-05"/>
     <release version="0.1.0" date="2026-11-05"/>
   </releases>

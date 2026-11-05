@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Import: `appofholding import` / **Import existing AppImages…** scans the usual places and your
   menu entries for loose AppImages, ones other tools integrated, and ones apps keep themselves;
@@ -8,6 +8,10 @@
   entries, and adopts files in place.
 - AppImages adopted in place are the user's files: removing the app keeps them unless
   `--delete-file` is given.
+
+- Redesigned interface: grouped app list with status at a glance, app tiles, a tabbed detail page
+  (Overview, Updates, Launch, Sandbox) built from cards, and a narrow-window layout.
+- Internal: lint clean (clippy) across the workspace.
 
 ## 0.2.0
 

@@ -318,6 +318,7 @@ pub(crate) fn exec_hook(app: &AppRecord, kind: &str, command: &str) -> Result<()
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::fixture;

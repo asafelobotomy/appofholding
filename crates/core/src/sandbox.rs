@@ -216,8 +216,11 @@ pub struct Host {
     pub dbus_address: Option<String>,
     pub exists: Box<dyn Fn(&Path) -> bool>,
     /// Entries of `dir` whose names start with `prefix` (e.g. `/dev`, `nvidia`).
-    pub list: Box<dyn Fn(&Path, &str) -> Vec<PathBuf>>,
+    pub list: Box<ListFn>,
 }
+
+/// Lists the entries of a directory whose names start with a prefix.
+pub type ListFn = dyn Fn(&Path, &str) -> Vec<PathBuf>;
 
 /// Variables copied from the launching environment when present.
 const PASS_ENV: &[&str] = &[

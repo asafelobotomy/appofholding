@@ -604,6 +604,7 @@ fn row_to_app(r: &Row<'_>) -> rusqlite::Result<AppRecord> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
