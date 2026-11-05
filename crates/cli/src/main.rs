@@ -5,9 +5,13 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use appimgr_core::assets::{self, Arch, Selection};
 use appimgr_core::check::{self, Report};
+use appimgr_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
 use appimgr_core::http::UreqHttp;
+use appimgr_core::notify::NotifySend;
+use appimgr_core::schedule::{self, Interval};
+use appimgr_core::source::Policy;
 use appimgr_core::source::{self, Channel, Source};
-use appimgr_core::version::Installed;
+use appimgr_core::version::{Installed, Status};
 use appimgr_core::{AddOptions, Dirs, Install, Library, inspect};
 use clap::{Parser, Subcommand};
 
@@ -55,6 +59,43 @@ enum Cmd {
     Source(SourceCmd),
     /// Check apps for updates (all apps with a source, or just ID).
     Check { id: Option<String> },
+    /// Download and install newer versions (all apps with a source, or just ID).
+    Update {
+        id: Option<String>,
+        /// What the background timer runs: follow each app's update policy, notify, never prompt.
+        #[arg(long)]
+        scheduled: bool,
+        /// Ignore pinned/skipped state and update even if the status is only "unknown".
+        #[arg(long)]
+        force: bool,
+        /// Leave the app alone (and say so) if it is currently running.
+        #[arg(long)]
+        defer_if_running: bool,
+        /// How many previous versions to keep for rollback.
+        #[arg(long, default_value_t = 2)]
+        keep: usize,
+    },
+    /// List the previous versions kept for rollback.
+    Versions { id: String },
+    /// Go back to a kept version (the newest one unless --to is given).
+    Rollback {
+        id: String,
+        /// Version string or SHA-256 prefix, as shown by `versions`.
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Set what happens when an update is found: auto, notify, manual or pinned.
+    Policy { id: String, policy: String },
+    /// Ignore the latest known version of an app (until a newer one appears).
+    Skip {
+        id: String,
+        /// Stop ignoring it.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Install or remove the systemd timer that checks for updates in the background.
+    #[command(subcommand)]
+    Schedule(ScheduleCmd),
     /// Launch an app (this is what generated menu entries call).
     Run {
         id: String,
@@ -62,6 +103,20 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Enable background update checks.
+    Install {
+        /// hourly, daily or weekly
+        #[arg(long, default_value = "daily")]
+        interval: String,
+    },
+    /// Disable background update checks.
+    Remove,
+    /// Show whether the timer is installed and when it runs next.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -159,6 +214,91 @@ fn progress() -> impl FnMut(u64, Option<u64>) {
     }
 }
 
+fn describe_outcome(o: &Outcome) -> String {
+    match o {
+        Outcome::Updated { id, from, to } => {
+            format!("{id}: updated {} -> {to}", from.as_deref().unwrap_or("?"))
+        }
+        Outcome::Available {
+            id,
+            version,
+            notified,
+        } => format!(
+            "{id}: {version} available{}",
+            if *notified { " (notified)" } else { "" }
+        ),
+        Outcome::Deferred { id, version } => format!("{id}: {version} waiting, app is running"),
+        Outcome::UpToDate { id } => format!("{id}: up to date"),
+        Outcome::Skipped { id, reason } => format!("{id}: skipped ({reason})"),
+        Outcome::Failed { id, error } => format!("{id}: error: {error}"),
+    }
+}
+
+fn systemctl(args: &[&str]) -> bool {
+    Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
+    let dirs = dirs()?;
+    match cmd {
+        ScheduleCmd::Install { interval } => {
+            let Some(iv) = Interval::parse(&interval) else {
+                bail!("interval must be hourly, daily or weekly")
+            };
+            let exe = std::env::current_exe().context("cannot determine own path")?;
+            let (svc, timer) = schedule::write_units(&dirs, &exe, iv)?;
+            println!("Wrote {}\n      {}", svc.display(), timer.display());
+            if dirs.refresh_caches {
+                if systemctl(&["daemon-reload"])
+                    && systemctl(&["enable", "--now", "appimgr-update.timer"])
+                {
+                    println!("Background checks are on ({interval}).");
+                } else {
+                    println!(
+                        "Could not enable the timer; run: systemctl --user enable --now appimgr-update.timer"
+                    );
+                }
+            }
+        }
+        ScheduleCmd::Remove => {
+            if dirs.refresh_caches {
+                systemctl(&["disable", "--now", "appimgr-update.timer"]);
+            }
+            let removed = schedule::remove_units(&dirs)?;
+            if dirs.refresh_caches {
+                systemctl(&["daemon-reload"]);
+            }
+            println!(
+                "{}",
+                if removed {
+                    "Background checks are off."
+                } else {
+                    "Background checks were not installed."
+                }
+            );
+        }
+        ScheduleCmd::Status => {
+            let (svc, timer) = schedule::unit_paths(&dirs);
+            println!(
+                "units:  {}",
+                if svc.exists() && timer.exists() {
+                    "installed"
+                } else {
+                    "not installed"
+                }
+            );
+            if dirs.refresh_caches {
+                systemctl(&["list-timers", "appimgr-update.timer", "--no-pager"]);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn source_cmd(cmd: SourceCmd) -> Result<()> {
     match cmd {
         SourceCmd::Show { id } => {
@@ -251,14 +391,16 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
             };
             let r = check::check(&UreqHttp::new(), &source, &installed, Arch::host())?;
             print_report(&source, &r);
-            if r.asset().is_none() && source.asset_pattern.is_none()
+            if r.asset().is_none()
+                && source.asset_pattern.is_none()
                 && let Selection::Ambiguous(v) = &r.selection
-                    && let Some(first) = v.first() {
-                        println!(
-                            "hint:    e.g. --asset '{}'",
-                            assets::suggest_pattern(&first.name)
-                        );
-                    }
+                && let Some(first) = v.first()
+            {
+                println!(
+                    "hint:    e.g. --asset '{}'",
+                    assets::suggest_pattern(&first.name)
+                );
+            }
         }
     }
     Ok(())
@@ -398,6 +540,112 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Cmd::Update {
+            id,
+            scheduled,
+            force,
+            defer_if_running,
+            keep,
+        } => {
+            let lib = library()?;
+            let http = UreqHttp::new();
+            if scheduled {
+                for o in lib.run_scheduled(&http, &NotifySend)? {
+                    println!("{}", describe_outcome(&o));
+                }
+                return Ok(());
+            }
+            let opts = ApplyOptions {
+                if_running: if defer_if_running {
+                    IfRunning::Defer
+                } else {
+                    IfRunning::Proceed
+                },
+                keep_versions: keep,
+                force,
+            };
+            let ids: Vec<String> = match id {
+                Some(i) => vec![i],
+                None => lib.sources()?.into_iter().map(|s| s.app_id).collect(),
+            };
+            if ids.is_empty() {
+                println!(
+                    "No apps have an update source yet. Use `appimgr source set <id> <link>`."
+                );
+            }
+            let mut failed = false;
+            for i in ids {
+                match lib.update(&http, &i, &opts, &mut progress()) {
+                    Ok(Applied::Updated { from, to, delta }) => println!(
+                        "{i}: updated {} -> {to}{}",
+                        from.as_deref().unwrap_or("?"),
+                        if delta { " (delta)" } else { "" }
+                    ),
+                    Ok(Applied::NoUpdate(Status::Unknown)) => println!(
+                        "{i}: can't tell if there is an update (use --force to reinstall the latest)"
+                    ),
+                    Ok(Applied::NoUpdate(_)) => println!("{i}: already up to date"),
+                    Ok(Applied::Skipped(why)) => println!("{i}: skipped ({why})"),
+                    Ok(Applied::Deferred { version, pids }) => println!(
+                        "{i}: {version} is available but the app is running (pid {}); try again after closing it",
+                        pids.iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    Err(e) => {
+                        failed = true;
+                        println!("{i}: error: {e}");
+                    }
+                }
+            }
+            if failed {
+                bail!("some updates failed");
+            }
+        }
+        Cmd::Versions { id } => {
+            let lib = library()?;
+            let app = lib.get(&id)?;
+            println!(
+                "current  {:<14} {}",
+                app.version.as_deref().unwrap_or("-"),
+                &app.sha256[..12]
+            );
+            for v in lib.versions(&id)? {
+                println!(
+                    "kept     {:<14} {}",
+                    v.version.as_deref().unwrap_or("-"),
+                    &v.sha256[..12]
+                );
+            }
+        }
+        Cmd::Rollback { id, to } => {
+            let rec = library()?.rollback(&id, to.as_deref())?;
+            println!(
+                "{id} is now version {}",
+                rec.version.as_deref().unwrap_or("?")
+            );
+            println!(
+                "The version you left is kept; the update you rolled back from will not be installed automatically."
+            );
+        }
+        Cmd::Policy { id, policy } => {
+            let Some(p) = Policy::parse(&policy) else {
+                bail!("policy must be auto, notify, manual or pinned")
+            };
+            library()?.set_policy(&id, p)?;
+            println!("{id}: update policy is now {}", p.as_str());
+        }
+        Cmd::Skip { id, clear } => {
+            let lib = library()?;
+            if clear {
+                lib.clear_skip(&id)?;
+                println!("{id}: no longer skipping any version");
+            } else {
+                println!("{id}: skipping {}", lib.skip_latest(&id)?);
+            }
+        }
+        Cmd::Schedule(cmd) => schedule_cmd(cmd)?,
         Cmd::Run { id, args } => {
             let rec = library()?.get(&id)?;
             // M4 will add launch profiles and sandboxing here; for now just exec the AppImage.

@@ -100,8 +100,13 @@ pub fn build_appimage(upd_info: Option<&str>, items: Vec<Item>) -> Vec<u8> {
 
 /// A typical well-formed AppImage: root .desktop + icon + `.DirIcon` symlink + AppRun.
 pub fn simple_appimage(name: &str, upd_info: Option<&str>) -> Vec<u8> {
+    versioned_appimage(name, "1.2.3", upd_info)
+}
+
+/// Like [`simple_appimage`] but with a chosen version (and therefore different bytes).
+pub fn versioned_appimage(name: &str, version: &str, upd_info: Option<&str>) -> Vec<u8> {
     let desktop = format!(
-        "[Desktop Entry]\nType=Application\nName={name}\nExec=AppRun --flag %U\nIcon=icon\nCategories=Utility;\nX-AppImage-Version=1.2.3\n\n[Desktop Action new]\nName=New window\nExec=AppRun --new-window\n"
+        "[Desktop Entry]\nType=Application\nName={name}\nExec=AppRun --flag %U\nIcon=icon\nCategories=Utility;\nX-AppImage-Version={version}\n\n[Desktop Action new]\nName=New window\nExec=AppRun --new-window\n"
     );
     build_appimage(
         upd_info,
@@ -113,6 +118,7 @@ pub fn simple_appimage(name: &str, upd_info: Option<&str>) -> Vec<u8> {
                 target: "icon.png",
             },
             Item::File("/AppRun", b"#!/bin/sh\nexit 0\n".to_vec()),
+            Item::File("/VERSION", version.as_bytes().to_vec()),
         ],
     )
 }

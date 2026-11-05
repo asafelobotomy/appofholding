@@ -234,9 +234,10 @@ impl Library {
         }
         // Remember where the AppImage says it wants to be updated from.
         if let Ok(rec) = &result
-            && let Some(Ok(p)) = rec.update_info.as_deref().map(crate::source::parse_input) {
-                let _ = self.db.upsert_source(&rec.id, &p.source);
-            }
+            && let Some(Ok(p)) = rec.update_info.as_deref().map(crate::source::parse_input)
+        {
+            let _ = self.db.upsert_source(&rec.id, &p.source);
+        }
         result
     }
 
@@ -273,19 +274,8 @@ impl Library {
         perms.set_mode(perms.mode() | 0o755);
         fs::set_permissions(dest, perms).map_err(Error::io(dest))?;
 
-        let icon_file = match &ins.icon {
-            Some(icon) => {
-                let p = self.icon_path(id, icon);
-                write_atomic(&p, &icon.data)?;
-                created.push(p.clone());
-                Some(p)
-            }
-            None => None,
-        };
-
-        let text = integrate_entry(&ins.entry, id, &self.exec_bin, icon_file.is_some());
-        let desktop_file = self.dirs.desktop_file(id);
-        write_atomic(&desktop_file, text.as_bytes())?;
+        let (desktop_file, icon_file) = self.write_integration(ins, id)?;
+        created.extend(icon_file.clone());
         created.push(desktop_file.clone());
 
         let rec = AppRecord {
@@ -305,6 +295,28 @@ impl Library {
         };
         self.db.insert(&rec)?;
         Ok(rec)
+    }
+
+    /// (Re)write the menu entry and icon for `id` from an inspected AppImage. Returns
+    /// (desktop file, icon file). Only generated files are touched; user settings live in the
+    /// database, so this is safe to call again after an update.
+    pub(crate) fn write_integration(
+        &self,
+        ins: &Inspection,
+        id: &str,
+    ) -> Result<(PathBuf, Option<PathBuf>)> {
+        let icon_file = match &ins.icon {
+            Some(icon) => {
+                let p = self.icon_path(id, icon);
+                write_atomic(&p, &icon.data)?;
+                Some(p)
+            }
+            None => None,
+        };
+        let text = integrate_entry(&ins.entry, id, &self.exec_bin, icon_file.is_some());
+        let desktop_file = self.dirs.desktop_file(id);
+        write_atomic(&desktop_file, text.as_bytes())?;
+        Ok((desktop_file, icon_file))
     }
 
     fn icon_path(&self, id: &str, icon: &Icon) -> PathBuf {
@@ -350,7 +362,7 @@ impl Library {
     }
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Other("path has no parent".into()))?;

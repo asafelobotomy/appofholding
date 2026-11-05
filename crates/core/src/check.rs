@@ -61,6 +61,16 @@ pub fn check(
     arch: Arch,
 ) -> Result<Report> {
     let release = providers::fetch_release(http, source)?;
+    Ok(evaluate(release, source, installed, arch))
+}
+
+/// Choose the asset in an already-fetched release and decide the status.
+pub fn evaluate(
+    release: Release,
+    source: &Source,
+    installed: &Installed<'_>,
+    arch: Arch,
+) -> Report {
     let selection = assets::select(&release.assets, source.asset_pattern.as_deref(), arch);
     let status = match selection.asset() {
         Some(asset) => version::decide(
@@ -72,11 +82,11 @@ pub fn check(
         // Without a downloadable file there is nothing to update to.
         None => Status::Unknown,
     };
-    Ok(Report {
+    Report {
         release,
         selection,
         status,
-    })
+    }
 }
 
 #[cfg(test)]

@@ -125,9 +125,19 @@ impl From<GlRelease> for Release {
 const JSON: &[(&str, &str)] = &[("Accept", "application/vnd.github+json, application/json")];
 
 fn get_json(http: &dyn Http, url: &str) -> Result<Response> {
-    let r = http.get(url, JSON)?;
+    get_json_cond(http, url, None)
+}
+
+/// Like [`get_json`], but sends `If-None-Match`; a `304 Not Modified` is returned as a normal
+/// response for the caller to interpret.
+fn get_json_cond(http: &dyn Http, url: &str, etag: Option<&str>) -> Result<Response> {
+    let mut headers = JSON.to_vec();
+    if let Some(e) = etag {
+        headers.push(("If-None-Match", e));
+    }
+    let r = http.get(url, &headers)?;
     match r.status {
-        200..=299 => Ok(r),
+        200..=299 | 304 => Ok(r),
         404 => Err(Error::Source(format!(
             "not found: {url} (check the repository and release name)"
         ))),
@@ -159,9 +169,37 @@ fn pick(releases: Vec<Release>, channel: &Channel) -> Option<Release> {
     }
 }
 
+/// Outcome of a conditional fetch.
+#[derive(Debug, Clone)]
+pub enum Fetched {
+    Fresh {
+        release: Release,
+        etag: Option<String>,
+    },
+    /// The server confirmed nothing changed since `etag` (does not count against GitHub's rate limit).
+    NotModified,
+}
+
+/// Fetch with an optional ETag from a previous fetch. Only GitHub supports this today; other
+/// providers always return `Fresh`.
+pub fn fetch_release_cond(http: &dyn Http, source: &Source, etag: Option<&str>) -> Result<Fetched> {
+    match &source.provider {
+        Provider::GitHub { owner, repo } => github(http, owner, repo, &source.channel, etag),
+        _ => fetch_release(http, source).map(|release| Fetched::Fresh {
+            release,
+            etag: None,
+        }),
+    }
+}
+
 pub fn fetch_release(http: &dyn Http, source: &Source) -> Result<Release> {
     match &source.provider {
-        Provider::GitHub { owner, repo } => github(http, owner, repo, &source.channel),
+        Provider::GitHub { owner, repo } => {
+            match github(http, owner, repo, &source.channel, None)? {
+                Fetched::Fresh { release, .. } => Ok(release),
+                Fetched::NotModified => Err(Error::Http("unexpected 304 Not Modified".into())),
+            }
+        }
         Provider::Forgejo { host, owner, repo } => {
             forgejo(http, host, owner, repo, &source.channel)
         }
@@ -177,7 +215,13 @@ fn none_found(what: &str, channel: &Channel) -> Error {
     ))
 }
 
-fn github(http: &dyn Http, owner: &str, repo: &str, channel: &Channel) -> Result<Release> {
+fn github(
+    http: &dyn Http,
+    owner: &str,
+    repo: &str,
+    channel: &Channel,
+    etag: Option<&str>,
+) -> Result<Fetched> {
     let base = format!("https://api.github.com/repos/{owner}/{repo}");
     // Tags (including moving tags like `nightly`) live under /releases/tags/, not /releases/<tag>
     // (Gear Lever #388).
@@ -186,20 +230,29 @@ fn github(http: &dyn Http, owner: &str, repo: &str, channel: &Channel) -> Result
         Channel::Tag(t) => format!("{base}/releases/tags/{t}"),
         _ => format!("{base}/releases?per_page=30"),
     };
-    let r = get_json(http, &url)?;
-    if matches!(channel, Channel::Stable | Channel::Tag(_)) {
-        let rel: ApiRelease = parse(&r, &url)?;
-        return Ok(rel.into());
+    let r = get_json_cond(http, &url, etag)?;
+    if r.status == 304 {
+        return Ok(Fetched::NotModified);
     }
-    let list: Vec<ApiRelease> = parse(&r, &url)?;
-    pick(
-        list.into_iter()
-            .filter(|r| !r.draft)
-            .map(Release::from)
-            .collect(),
-        channel,
-    )
-    .ok_or_else(|| none_found(&format!("{owner}/{repo}"), channel))
+    let new_etag = r.header("etag").map(str::to_string);
+    let release = if matches!(channel, Channel::Stable | Channel::Tag(_)) {
+        let rel: ApiRelease = parse(&r, &url)?;
+        rel.into()
+    } else {
+        let list: Vec<ApiRelease> = parse(&r, &url)?;
+        pick(
+            list.into_iter()
+                .filter(|r| !r.draft)
+                .map(Release::from)
+                .collect(),
+            channel,
+        )
+        .ok_or_else(|| none_found(&format!("{owner}/{repo}"), channel))?
+    };
+    Ok(Fetched::Fresh {
+        release,
+        etag: new_etag,
+    })
 }
 
 fn forgejo(
@@ -352,6 +405,31 @@ mod tests {
         assert_eq!(rel.assets.len(), 2);
         assert_eq!(rel.assets[0].sha256.as_deref(), Some("abcdef"));
         assert_eq!(rel.assets[1].sha256, None);
+    }
+
+    #[test]
+    fn conditional_requests_return_not_modified() {
+        let url = "https://api.github.com/repos/o/r/releases/latest";
+        let mut http = FakeHttp::default().json(url, GH_RELEASE);
+        http.responses
+            .get_mut(url)
+            .unwrap()
+            .headers
+            .push(("etag".into(), "W/\"abc\"".into()));
+        let s = src("o/r");
+        let Fetched::Fresh { etag, .. } = fetch_release_cond(&http, &s, None).unwrap() else {
+            panic!("expected fresh")
+        };
+        assert_eq!(etag.as_deref(), Some("W/\"abc\""));
+        assert!(matches!(
+            fetch_release_cond(&http, &s, etag.as_deref()).unwrap(),
+            Fetched::NotModified
+        ));
+        // A stale ETag gets the full release again.
+        assert!(matches!(
+            fetch_release_cond(&http, &s, Some("W/\"old\"")).unwrap(),
+            Fetched::Fresh { .. }
+        ));
     }
 
     #[test]

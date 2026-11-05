@@ -32,6 +32,8 @@ pub enum Error {
     Source(String),
     #[error("GitHub API rate limit reached{}; set GITHUB_TOKEN to raise the limit", .0.as_deref().map(|r| format!(" (resets {r})")).unwrap_or_default())]
     RateLimited(Option<String>),
+    #[error("the server ignored the resume request")]
+    RangeIgnored,
     #[error("checksum mismatch: expected {expected}, got {actual}")]
     Checksum { expected: String, actual: String },
     #[error("{0}")]

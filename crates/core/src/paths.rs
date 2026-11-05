@@ -9,6 +9,8 @@ use crate::error::{Error, Result};
 pub struct Dirs {
     /// `$XDG_DATA_HOME` (default `~/.local/share`).
     pub data_home: PathBuf,
+    /// `$XDG_CONFIG_HOME` (default `~/.config`).
+    pub config_home: PathBuf,
     /// Where AppImages are stored (default `~/Applications`).
     pub library_dir: PathBuf,
     /// Run `update-desktop-database` after changes (off in tests).
@@ -26,7 +28,12 @@ impl Dirs {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .unwrap_or_else(|| home.join(".local/share"));
+        let config_home = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".config"));
         Ok(Self {
+            config_home,
             data_home,
             library_dir: home.join("Applications"),
             refresh_caches: true,
@@ -36,10 +43,20 @@ impl Dirs {
     /// Everything under `root`; nothing touches the real home directory.
     pub fn with_root(root: &Path) -> Self {
         Self {
+            config_home: root.join("config"),
             data_home: root.join("data"),
             library_dir: root.join("Applications"),
             refresh_caches: false,
         }
+    }
+
+    pub fn systemd_user_dir(&self) -> PathBuf {
+        self.config_home.join("systemd/user")
+    }
+
+    /// Previous versions of an app live here, for rollback.
+    pub fn versions_dir(&self, id: &str) -> PathBuf {
+        self.app_data_dir().join("apps").join(id).join("versions")
     }
 
     pub fn applications_dir(&self) -> PathBuf {

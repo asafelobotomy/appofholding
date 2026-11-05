@@ -3,9 +3,11 @@
 pub mod assets;
 pub mod check;
 pub mod db;
+pub mod delta;
 pub mod desktop;
 pub mod download;
 mod elf;
+pub mod engine;
 pub mod error;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixture;
@@ -13,8 +15,11 @@ pub mod http;
 pub mod icon;
 pub mod image;
 pub mod library;
+pub mod notify;
 pub mod paths;
 pub mod providers;
+pub mod running;
+pub mod schedule;
 pub mod source;
 pub mod updates;
 pub mod version;

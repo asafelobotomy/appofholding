@@ -81,9 +81,10 @@ pub fn decide(
 ) -> Status {
     // Identical content is always up to date, whatever the tags say.
     if let (Some(a), Some(b)) = (installed.sha256, latest_sha256)
-        && a.eq_ignore_ascii_case(b) {
-            return Status::UpToDate;
-        }
+        && a.eq_ignore_ascii_case(b)
+    {
+        return Status::UpToDate;
+    }
     let Some(cur) = installed.version.filter(|v| !v.is_empty()) else {
         // Nothing to compare by version; a differing digest is still conclusive.
         return match (installed.sha256, latest_sha256) {

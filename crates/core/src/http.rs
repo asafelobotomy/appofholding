@@ -26,10 +26,13 @@ impl Response {
 pub trait Http {
     fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response>;
     fn head(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response>;
-    /// Stream the body of `url` into `out`. `progress(done, total)` is called as data arrives.
+    /// Stream the body of `url` into `out`, starting at byte `offset` (a resume). If the server
+    /// does not honour the range, nothing is written and `Error::RangeIgnored` is returned.
+    /// `progress(done, total)` counts from the start of the file, not from `offset`.
     fn download(
         &self,
         url: &str,
+        offset: u64,
         out: &mut dyn Write,
         progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<()>;
@@ -123,15 +126,19 @@ impl Http for UreqHttp {
     fn download(
         &self,
         url: &str,
+        offset: u64,
         out: &mut dyn Write,
         progress: &mut dyn FnMut(u64, Option<u64>),
     ) -> Result<()> {
-        let resp = self
-            .agent
-            .get(url)
-            .call()
-            .map_err(|e| Error::Http(e.to_string()))?;
+        let mut req = self.agent.get(url);
+        if offset > 0 {
+            req = req.header("Range", format!("bytes={offset}-"));
+        }
+        let resp = req.call().map_err(|e| Error::Http(e.to_string()))?;
         let status = resp.status().as_u16();
+        if offset > 0 && (status == 200 || status == 416) {
+            return Err(Error::RangeIgnored);
+        }
         if !(200..300).contains(&status) {
             return Err(Error::Http(format!(
                 "download failed: HTTP {status} for {url}"
@@ -141,11 +148,12 @@ impl Http for UreqHttp {
             .headers()
             .get("content-length")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|len| len + offset);
         let mut body = resp.into_body();
         let mut reader = body.as_reader();
         let mut buf = vec![0u8; 256 * 1024];
-        let mut done = 0u64;
+        let mut done = offset;
         loop {
             let n = reader
                 .read(&mut buf)
@@ -174,6 +182,11 @@ pub mod fake {
     pub struct FakeHttp {
         pub responses: HashMap<String, Response>,
         pub requests: RefCell<Vec<String>>,
+        /// Pretend the server does not support Range requests.
+        pub ignore_range: bool,
+        /// Drop the connection after this many body bytes (first attempt semantics: applies to
+        /// every download call).
+        pub fail_after: Option<usize>,
     }
 
     impl FakeHttp {
@@ -223,8 +236,22 @@ pub mod fake {
     }
 
     impl Http for FakeHttp {
-        fn get(&self, url: &str, _: &[(&str, &str)]) -> Result<Response> {
-            self.lookup(url)
+        fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response> {
+            let r = self.lookup(url)?;
+            // Behave like a server that supports conditional requests.
+            let inm = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"));
+            if let (Some((_, want)), Some(have)) = (inm, r.header("etag"))
+                && *want == have
+            {
+                return Ok(Response {
+                    status: 304,
+                    headers: r.headers.clone(),
+                    body: vec![],
+                });
+            }
+            Ok(r)
         }
         fn head(&self, url: &str, _: &[(&str, &str)]) -> Result<Response> {
             let mut r = self.lookup(url)?;
@@ -234,6 +261,7 @@ pub mod fake {
         fn download(
             &self,
             url: &str,
+            offset: u64,
             out: &mut dyn Write,
             progress: &mut dyn FnMut(u64, Option<u64>),
         ) -> Result<()> {
@@ -241,8 +269,17 @@ pub mod fake {
             if r.status != 200 {
                 return Err(Error::Http(format!("HTTP {}", r.status)));
             }
-            out.write_all(&r.body)
+            if offset > 0 && self.ignore_range {
+                return Err(Error::RangeIgnored);
+            }
+            let rest = &r.body[(offset as usize).min(r.body.len())..];
+            // `fail_after` simulates a connection that drops mid-download.
+            let n = self.fail_after.map_or(rest.len(), |f| f.min(rest.len()));
+            out.write_all(&rest[..n])
                 .map_err(|e| Error::Http(e.to_string()))?;
+            if n < rest.len() {
+                return Err(Error::Http("connection reset".into()));
+            }
             progress(r.body.len() as u64, Some(r.body.len() as u64));
             Ok(())
         }

@@ -153,13 +153,14 @@ pub fn suggest_pattern(file: &str) -> String {
     }
     // The last token ("x86_64.AppImage") keeps its extension, so split it off first.
     if let Some((stem, ext)) = token.rsplit_once('.')
-        && ext.eq_ignore_ascii_case("appimage") {
-            let mut t = stem.to_string();
-            flush(&mut t, &mut out);
-            out.push('.');
-            out.push_str(ext);
-            return collapse(&out);
-        }
+        && ext.eq_ignore_ascii_case("appimage")
+    {
+        let mut t = stem.to_string();
+        flush(&mut t, &mut out);
+        out.push('.');
+        out.push_str(ext);
+        return collapse(&out);
+    }
     flush(&mut token, &mut out);
     collapse(&out)
 }

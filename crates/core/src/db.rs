@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::{Error, Result};
-use crate::source::{Channel, Origin, Provider, Source};
+use crate::source::{Channel, Origin, Policy, Provider, Source};
 
 /// Each entry migrates the schema from version N to N+1 (`PRAGMA user_version`).
 const MIGRATIONS: &[&str] = &[
@@ -40,6 +40,21 @@ const MIGRATIONS: &[&str] = &[
         installed_version TEXT,
         installed_digest TEXT
     );",
+    // v3: update policy, ETag cache, and kept previous versions for rollback
+    "ALTER TABLE sources ADD COLUMN policy TEXT NOT NULL DEFAULT 'notify';
+     ALTER TABLE sources ADD COLUMN skipped_version TEXT;
+     ALTER TABLE sources ADD COLUMN notified_version TEXT;
+     ALTER TABLE sources ADD COLUMN etag TEXT;
+     ALTER TABLE sources ADD COLUMN etag_ctx TEXT;
+     CREATE TABLE versions (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id     TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        version    TEXT,
+        sha256     TEXT NOT NULL,
+        file_name  TEXT NOT NULL,   -- the AppImage's original file name
+        path       TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+     );",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +83,26 @@ pub struct SourceRecord {
     pub last_latest: Option<String>,
     pub installed_version: Option<String>,
     pub installed_digest: Option<String>,
+    pub policy: Policy,
+    /// A version the user chose to ignore ("skip this version").
+    pub skipped_version: Option<String>,
+    /// The version we already told the user about (so notifications fire once).
+    pub notified_version: Option<String>,
+    pub etag: Option<String>,
+    /// What the ETag was computed for; it is only reused while this still matches.
+    pub etag_ctx: Option<String>,
+}
+
+/// A previous version kept on disk for rollback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionRecord {
+    pub id: i64,
+    pub app_id: String,
+    pub version: Option<String>,
+    pub sha256: String,
+    pub file_name: String,
+    pub path: PathBuf,
+    pub created_at: i64,
 }
 
 pub struct Db {
@@ -249,6 +284,99 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_policy(&self, app_id: &str, p: Policy) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET policy=?2 WHERE app_id=?1",
+            params![app_id, p.as_str()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_skipped(&self, app_id: &str, v: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET skipped_version=?2 WHERE app_id=?1",
+            params![app_id, v],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_notified(&self, app_id: &str, v: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET notified_version=?2 WHERE app_id=?1",
+            params![app_id, v],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_etag(&self, app_id: &str, etag: Option<&str>, ctx: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET etag=?2, etag_ctx=?3 WHERE app_id=?1",
+            params![app_id, etag, ctx],
+        )?;
+        Ok(())
+    }
+
+    /// Replace everything about an app except its id and when it was added.
+    pub fn update_app(&self, a: &AppRecord) -> Result<()> {
+        self.conn.execute(
+            "UPDATE apps SET name=?2, appimage_path=?3, desktop_file=?4, icon_file=?5, version=?6, sha256=?7, size=?8, appimage_type=?9, update_info=?10 WHERE id=?1",
+            params![
+                a.id,
+                a.name,
+                a.appimage_path.to_string_lossy(),
+                a.desktop_file.to_string_lossy(),
+                a.icon_file.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                a.version,
+                a.sha256,
+                a.size as i64,
+                a.appimage_type,
+                a.update_info,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn add_version(
+        &self,
+        app_id: &str,
+        version: Option<&str>,
+        sha256: &str,
+        file_name: &str,
+        path: &Path,
+        at: i64,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO versions (app_id, version, sha256, file_name, path, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![app_id, version, sha256, file_name, path.to_string_lossy(), at],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Newest first.
+    pub fn list_versions(&self, app_id: &str) -> Result<Vec<VersionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM versions WHERE app_id = ?1 ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([app_id], |r| {
+            Ok(VersionRecord {
+                id: r.get("id")?,
+                app_id: r.get("app_id")?,
+                version: r.get("version")?,
+                sha256: r.get("sha256")?,
+                file_name: r.get("file_name")?,
+                path: PathBuf::from(r.get::<_, String>("path")?),
+                created_at: r.get("created_at")?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn delete_version(&self, id: i64) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM versions WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn delete(&self, id: &str) -> Result<bool> {
         Ok(self.conn.execute("DELETE FROM apps WHERE id = ?1", [id])? > 0)
     }
@@ -319,6 +447,11 @@ fn row_to_source(r: &Row<'_>) -> rusqlite::Result<SourceRecord> {
         last_latest: r.get("last_latest")?,
         installed_version: r.get("installed_version")?,
         installed_digest: r.get("installed_digest")?,
+        policy: Policy::parse(&r.get::<_, String>("policy")?).unwrap_or_default(),
+        skipped_version: r.get("skipped_version")?,
+        notified_version: r.get("notified_version")?,
+        etag: r.get("etag")?,
+        etag_ctx: r.get("etag_ctx")?,
     })
 }
 
@@ -436,6 +569,71 @@ mod tests {
             db.upsert_source("a", &s).unwrap();
             assert_eq!(db.get_source("a").unwrap().unwrap().source, s);
         }
+    }
+
+    #[test]
+    fn policy_defaults_and_survives_source_edits() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert(&rec("a", "/x/a")).unwrap();
+        let mut s = Source::new(Provider::GitHub {
+            owner: "o".into(),
+            repo: "r".into(),
+        });
+        db.upsert_source("a", &s).unwrap();
+        assert_eq!(db.get_source("a").unwrap().unwrap().policy, Policy::Notify);
+        db.set_policy("a", Policy::Auto).unwrap();
+        db.set_skipped("a", Some("v9")).unwrap();
+        db.set_etag("a", Some("W/\"1\""), Some("ctx")).unwrap();
+        s.asset_pattern = Some("x*".into());
+        db.upsert_source("a", &s).unwrap();
+        let got = db.get_source("a").unwrap().unwrap();
+        assert_eq!(got.policy, Policy::Auto);
+        assert_eq!(got.skipped_version.as_deref(), Some("v9"));
+        assert_eq!(got.etag_ctx.as_deref(), Some("ctx"));
+    }
+
+    #[test]
+    fn versions_and_app_update() {
+        let db = Db::open_in_memory().unwrap();
+        let mut a = rec("a", "/x/a");
+        db.insert(&a).unwrap();
+        let v1 = db
+            .add_version(
+                "a",
+                Some("1.0"),
+                "s1",
+                "A-1.0.AppImage",
+                Path::new("/v/1"),
+                10,
+            )
+            .unwrap();
+        let v2 = db
+            .add_version("a", None, "s2", "A-2.AppImage", Path::new("/v/2"), 20)
+            .unwrap();
+        let list = db.list_versions("a").unwrap();
+        assert_eq!(list.iter().map(|v| v.id).collect::<Vec<_>>(), vec![v2, v1]);
+        db.delete_version(v2).unwrap();
+        assert_eq!(db.list_versions("a").unwrap().len(), 1);
+
+        a.version = Some("2.0".into());
+        a.appimage_path = "/x/new".into();
+        a.added_at = 999; // never overwritten
+        db.update_app(&a).unwrap();
+        let got = db.get("a").unwrap().unwrap();
+        assert_eq!(
+            (
+                got.version.as_deref(),
+                got.appimage_path.to_str(),
+                got.added_at
+            ),
+            (Some("2.0"), Some("/x/new"), 1)
+        );
+
+        db.delete("a").unwrap();
+        assert!(
+            db.list_versions("a").unwrap().is_empty(),
+            "versions cascade with the app"
+        );
     }
 
     #[test]

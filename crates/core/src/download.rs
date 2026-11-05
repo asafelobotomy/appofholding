@@ -1,7 +1,7 @@
-//! Downloading an asset to disk with checksum verification.
+//! Downloading an asset to disk: resumable, checksum-verified, never leaves a bad final file.
 
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -26,8 +26,27 @@ impl<W: Write> Write for HashingWriter<W> {
     }
 }
 
+fn hash_prefix(path: &Path) -> Result<Sha256> {
+    let mut h = Sha256::new();
+    let mut f = File::open(path).map_err(Error::io(path))?;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(Error::io(path))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h)
+}
+
 /// Download `asset` into `dir` (as its own file name). Returns the final path and the SHA-256 of
-/// what was written. If the host published a digest, a mismatch deletes the file and fails.
+/// what was written.
+///
+/// * An interrupted download leaves `.<name>.part` behind and the next call resumes from it
+///   (falling back to a full download if the server ignores the Range request).
+/// * If the host published a digest (or the size is known), a mismatch deletes the partial file
+///   and fails; the final path only ever appears once the file is complete and verified.
 pub fn download_asset(
     http: &dyn Http,
     asset: &Asset,
@@ -42,30 +61,60 @@ pub fn download_asset(
     let dest = dir.join(name);
     let part = dir.join(format!(".{}.part", name.to_string_lossy()));
 
-    let file = File::create(&part).map_err(Error::io(&part))?;
-    let mut w = HashingWriter {
-        inner: file,
-        hash: Sha256::new(),
+    let mut offset = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let actual = loop {
+        let (file, hash) = if offset > 0 {
+            let hash = hash_prefix(&part)?;
+            (
+                OpenOptions::new()
+                    .append(true)
+                    .open(&part)
+                    .map_err(Error::io(&part))?,
+                hash,
+            )
+        } else {
+            (
+                File::create(&part).map_err(Error::io(&part))?,
+                Sha256::new(),
+            )
+        };
+        let mut w = HashingWriter { inner: file, hash };
+        let result = http.download(&asset.url, offset, &mut w, progress);
+        let flushed = w.flush();
+        match result {
+            Ok(()) => {
+                flushed.map_err(Error::io(&part))?;
+                break hex::encode(w.hash.finalize());
+            }
+            Err(Error::RangeIgnored) if offset > 0 => {
+                offset = 0; // start over from the beginning
+            }
+            // Keep the partial file so the next attempt can resume.
+            Err(e) => return Err(e),
+        }
     };
-    let result = http.download(&asset.url, &mut w, progress);
-    let flushed = w.flush();
-    let actual = hex::encode(w.hash.finalize());
-    if let Err(e) = result {
+
+    let bad_size = asset
+        .size
+        .filter(|s| *s > 0)
+        .is_some_and(|s| fs::metadata(&part).map(|m| m.len()).ok() != Some(s));
+    if bad_size {
         let _ = fs::remove_file(&part);
-        return Err(e);
-    }
-    if let Err(e) = flushed {
-        let _ = fs::remove_file(&part);
-        return Err(Error::io(&part)(e));
+        return Err(Error::Source(format!(
+            "downloaded file for {} has the wrong size (expected {} bytes)",
+            asset.name,
+            asset.size.unwrap_or(0)
+        )));
     }
     if let Some(expected) = &asset.sha256
-        && !expected.eq_ignore_ascii_case(&actual) {
-            let _ = fs::remove_file(&part);
-            return Err(Error::Checksum {
-                expected: expected.clone(),
-                actual,
-            });
-        }
+        && !expected.eq_ignore_ascii_case(&actual)
+    {
+        let _ = fs::remove_file(&part);
+        return Err(Error::Checksum {
+            expected: expected.clone(),
+            actual,
+        });
+    }
     fs::rename(&part, &dest).map_err(Error::io(&dest))?;
     Ok((dest, actual))
 }
@@ -132,5 +181,64 @@ mod tests {
         )
         .unwrap();
         assert_eq!(path.parent().unwrap(), dir.path());
+    }
+
+    #[test]
+    fn interrupted_download_resumes_and_still_verifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+        let sha = hex::encode(Sha256::digest(&body));
+        let a = asset("Foo.AppImage", Some(&sha));
+
+        // First attempt: the connection drops after 4000 bytes.
+        let mut flaky = FakeHttp::default().bytes("https://dl/x", body.clone());
+        flaky.fail_after = Some(4000);
+        assert!(download_asset(&flaky, &a, dir.path(), &mut |_, _| {}).is_err());
+        let part = dir.path().join(".Foo.AppImage.part");
+        assert_eq!(
+            fs::metadata(&part).unwrap().len(),
+            4000,
+            "partial data is kept"
+        );
+        assert!(!dir.path().join("Foo.AppImage").exists());
+
+        // Second attempt resumes: only the remaining bytes are requested/written.
+        let good = FakeHttp::default().bytes("https://dl/x", body.clone());
+        let (path, got) = download_asset(&good, &a, dir.path(), &mut |_, _| {}).unwrap();
+        assert_eq!(got, sha);
+        assert_eq!(fs::read(path).unwrap(), body);
+        assert!(!part.exists());
+    }
+
+    #[test]
+    fn server_ignoring_range_restarts_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = b"0123456789".to_vec();
+        let sha = hex::encode(Sha256::digest(&body));
+        fs::write(
+            dir.path().join(".Foo.AppImage.part"),
+            b"garbage-from-another-version",
+        )
+        .unwrap();
+        let mut http = FakeHttp::default().bytes("https://dl/x", body.clone());
+        http.ignore_range = true;
+        let (path, _) = download_asset(
+            &http,
+            &asset("Foo.AppImage", Some(&sha)),
+            dir.path(),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
+    }
+
+    #[test]
+    fn wrong_size_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let http = FakeHttp::default().bytes("https://dl/x", b"short".to_vec());
+        let mut a = asset("Foo.AppImage", None);
+        a.size = Some(999);
+        assert!(download_asset(&http, &a, dir.path(), &mut |_, _| {}).is_err());
+        assert!(!dir.path().join("Foo.AppImage").exists());
     }
 }

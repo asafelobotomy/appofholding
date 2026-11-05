@@ -65,6 +65,40 @@ impl Channel {
     }
 }
 
+/// What to do when a new version is found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Policy {
+    /// Download and install automatically (the scheduled updater).
+    Auto,
+    /// Tell the user once per version, install only on request.
+    #[default]
+    Notify,
+    /// Check, but stay silent; install only on request.
+    Manual,
+    /// Never touch this app's version (no checks, no updates).
+    Pinned,
+}
+
+impl Policy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Policy::Auto => "auto",
+            Policy::Notify => "notify",
+            Policy::Manual => "manual",
+            Policy::Pinned => "pinned",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Policy> {
+        Some(match s {
+            "auto" => Policy::Auto,
+            "notify" => Policy::Notify,
+            "manual" => Policy::Manual,
+            "pinned" | "lock" | "locked" => Policy::Pinned,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
     /// Read from the AppImage's own `.upd_info`.

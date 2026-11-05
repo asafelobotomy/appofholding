@@ -13,7 +13,7 @@ use crate::library::{AddOptions, Install, Library};
 use crate::source::{Origin, Parsed, Source};
 use crate::version::Installed;
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
@@ -39,47 +39,12 @@ impl Library {
         self.db.delete_source(id)
     }
 
-    /// Check one app's source and record the outcome (a status, or the error) in the database.
+    /// Check one app's source (always asking the server) and record the outcome in the
+    /// database: a status, or the error.
     pub fn check(&self, http: &dyn Http, id: &str) -> Result<Report> {
-        let app = self.get(id)?;
-        let rec = self.db.get_source(id)?.ok_or_else(|| {
-            Error::Source(format!(
-                "'{id}' has no update source; set one with `appimgr source set`"
-            ))
-        })?;
-        let mut installed_version = rec.installed_version.clone().or(app.version.clone());
-        if matches!(rec.source.provider, crate::source::Provider::Zsync { .. })
-            && !installed_version
-                .as_deref()
-                .is_some_and(|v| v.starts_with("sha1:"))
-        {
-            // The control file identifies builds by SHA-1, so hash what is installed and compare
-            // like with like (this also makes adopted apps comparable).
-            installed_version = crate::image::sha1_file(&app.appimage_path)
-                .ok()
-                .map(|h| format!("sha1:{h}"));
-        }
-        let installed = Installed {
-            version: installed_version.as_deref(),
-            sha256: rec.installed_digest.as_deref(),
-        };
-        let outcome = check::check(http, &rec.source, &installed, Arch::host());
-        match &outcome {
-            Ok(r) => {
-                let err = r.problem();
-                self.db.record_check(
-                    id,
-                    now(),
-                    Some(r.status.as_str()),
-                    err.as_deref(),
-                    Some(r.latest_version()),
-                )?
-            }
-            Err(e) => self
-                .db
-                .record_check(id, now(), None, Some(&e.to_string()), None)?,
-        }
-        outcome
+        self.check_impl(http, id, false)?
+            .report
+            .ok_or_else(|| Error::Other("internal: missing report".into()))
     }
 
     /// Install straight from a pasted link: resolve release, choose and download the asset,
@@ -176,8 +141,8 @@ mod tests {
     fn release_json(tag: &str, sha: &str) -> String {
         format!(
             r#"{{"tag_name":"{tag}","prerelease":false,"draft":false,"assets":[
-              {{"name":"Foo-{tag}-x86_64.AppImage","browser_download_url":"https://dl/foo-{tag}","size":1,"digest":"sha256:{sha}"}},
-              {{"name":"Foo-{tag}-aarch64.AppImage","browser_download_url":"https://dl/foo-arm","size":1}}]}}"#
+              {{"name":"Foo-{tag}-x86_64.AppImage","browser_download_url":"https://dl/foo-{tag}","digest":"sha256:{sha}"}},
+              {{"name":"Foo-{tag}-aarch64.AppImage","browser_download_url":"https://dl/foo-arm"}}]}}"#
         )
     }
 
