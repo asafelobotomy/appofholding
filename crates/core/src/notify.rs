@@ -13,7 +13,7 @@ impl Notifier for NotifySend {
     fn notify(&self, title: &str, body: &str) {
         let _ = Command::new("notify-send")
             .args([
-                "--app-name=appimgr",
+                "--app-name=appofholding",
                 "--icon=system-software-update",
                 "--",
                 title,

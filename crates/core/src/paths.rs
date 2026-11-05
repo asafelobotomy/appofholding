@@ -1,5 +1,5 @@
 //! XDG-aware directory layout. Everything the library writes goes through [`Dirs`], so tests
-//! (and `APPIMGR_ROOT` in the CLI) can redirect the whole tree into a throwaway directory.
+//! (and `APPOFHOLDING_ROOT` in the CLI) can redirect the whole tree into a throwaway directory.
 
 use std::path::{Path, PathBuf};
 
@@ -68,7 +68,7 @@ impl Dirs {
     }
 
     pub fn app_data_dir(&self) -> PathBuf {
-        self.data_home.join("appimgr")
+        self.data_home.join("appofholding")
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -83,7 +83,7 @@ impl Dirs {
 
 /// Name (without extension) used for the generated `.desktop` file and icon.
 pub fn desktop_id(id: &str) -> String {
-    format!("appimgr-{id}")
+    format!("appofholding-{id}")
 }
 
 /// `Some Cool App 2.0` -> `some-cool-app-2-0`. Never empty.

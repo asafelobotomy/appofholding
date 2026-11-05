@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::{Error, Result};
+use crate::launch::Profile;
 use crate::source::{Channel, Origin, Policy, Provider, Source};
 
 /// Each entry migrates the schema from version N to N+1 (`PRAGMA user_version`).
@@ -54,6 +55,25 @@ const MIGRATIONS: &[&str] = &[
         file_name  TEXT NOT NULL,   -- the AppImage's original file name
         path       TEXT NOT NULL,
         created_at INTEGER NOT NULL
+     );",
+    // v4: launch profiles and hooks
+    "CREATE TABLE launch_profiles (
+        app_id           TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        name             TEXT NOT NULL,
+        args             TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        env              TEXT NOT NULL DEFAULT '{}',   -- JSON object
+        prefix           TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        presets          TEXT NOT NULL DEFAULT '[]',   -- JSON array
+        cwd              TEXT,
+        extract_and_run  INTEGER NOT NULL DEFAULT 0,
+        elevated         INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (app_id, name)
+     );
+     CREATE TABLE hooks (
+        app_id  TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        kind    TEXT NOT NULL,   -- post-install | pre-update | post-update
+        command TEXT NOT NULL,
+        PRIMARY KEY (app_id, kind)
      );",
 ];
 
@@ -371,6 +391,80 @@ impl Db {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn put_profile(&self, app_id: &str, name: &str, p: &Profile) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO launch_profiles (app_id,name,args,env,prefix,presets,cwd,extract_and_run,elevated)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(app_id,name) DO UPDATE SET args=?3,env=?4,prefix=?5,presets=?6,cwd=?7,extract_and_run=?8,elevated=?9",
+            params![
+                app_id,
+                name,
+                serde_json::to_string(&p.args).unwrap_or_default(),
+                serde_json::to_string(&p.env).unwrap_or_default(),
+                serde_json::to_string(&p.prefix).unwrap_or_default(),
+                serde_json::to_string(&p.presets).unwrap_or_default(),
+                p.cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
+                p.extract_and_run,
+                p.elevated,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All profiles of an app, `default` first, then by name.
+    pub fn list_profiles(&self, app_id: &str) -> Result<Vec<(String, Profile)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM launch_profiles WHERE app_id = ?1 ORDER BY name != 'default', name",
+        )?;
+        let rows = stmt.query_map([app_id], |r| {
+            let parse = |col: &str| -> rusqlite::Result<String> { r.get(col) };
+            Ok((
+                r.get::<_, String>("name")?,
+                Profile {
+                    args: serde_json::from_str(&parse("args")?).unwrap_or_default(),
+                    env: serde_json::from_str(&parse("env")?).unwrap_or_default(),
+                    prefix: serde_json::from_str(&parse("prefix")?).unwrap_or_default(),
+                    presets: serde_json::from_str(&parse("presets")?).unwrap_or_default(),
+                    cwd: r.get::<_, Option<String>>("cwd")?.map(PathBuf::from),
+                    extract_and_run: r.get("extract_and_run")?,
+                    elevated: r.get("elevated")?,
+                },
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn delete_profile(&self, app_id: &str, name: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM launch_profiles WHERE app_id = ?1 AND name = ?2",
+            params![app_id, name],
+        )? > 0)
+    }
+
+    pub fn set_hook(&self, app_id: &str, kind: &str, command: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO hooks (app_id,kind,command) VALUES (?1,?2,?3)
+             ON CONFLICT(app_id,kind) DO UPDATE SET command=?3",
+            params![app_id, kind, command],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_hook(&self, app_id: &str, kind: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM hooks WHERE app_id = ?1 AND kind = ?2",
+            params![app_id, kind],
+        )? > 0)
+    }
+
+    pub fn list_hooks(&self, app_id: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, command FROM hooks WHERE app_id = ?1 ORDER BY kind")?;
+        let rows = stmt.query_map([app_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn delete_version(&self, id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM versions WHERE id = ?1", [id])?;
@@ -633,6 +727,45 @@ mod tests {
         assert!(
             db.list_versions("a").unwrap().is_empty(),
             "versions cascade with the app"
+        );
+    }
+
+    #[test]
+    fn profiles_and_hooks_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert(&rec("a", "/x/a")).unwrap();
+        let mut p = Profile::default();
+        p.args = vec!["--a b".into(), "c".into()];
+        p.env.insert("K".into(), "v=1".into());
+        p.prefix = vec!["nice".into()];
+        p.presets = vec!["x11".into()];
+        p.cwd = Some("/srv".into());
+        p.extract_and_run = true;
+        db.put_profile("a", "default", &p).unwrap();
+        db.put_profile("a", "debug", &Profile::default()).unwrap();
+        db.put_profile("a", "default", &p).unwrap(); // upsert
+        let list = db.list_profiles("a").unwrap();
+        assert_eq!(
+            list.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["default", "debug"]
+        );
+        assert_eq!(list[0].1, p);
+        assert!(db.delete_profile("a", "debug").unwrap());
+
+        db.set_hook("a", "post-update", "echo 1").unwrap();
+        db.set_hook("a", "post-update", "echo 2").unwrap();
+        db.set_hook("a", "pre-update", "true").unwrap();
+        assert_eq!(
+            db.list_hooks("a").unwrap(),
+            vec![
+                ("post-update".to_string(), "echo 2".to_string()),
+                ("pre-update".to_string(), "true".to_string())
+            ]
+        );
+        assert!(db.clear_hook("a", "pre-update").unwrap());
+        db.delete("a").unwrap();
+        assert!(
+            db.list_profiles("a").unwrap().is_empty() && db.list_hooks("a").unwrap().is_empty()
         );
     }
 

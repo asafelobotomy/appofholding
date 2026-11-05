@@ -16,6 +16,7 @@ use crate::image;
 use crate::library::{Library, inspect};
 use crate::notify::Notifier;
 use crate::paths::slugify;
+use crate::profiles::exec_hook;
 use crate::providers::{self, Fetched};
 use crate::running;
 use crate::source::{Policy, Provider};
@@ -135,7 +136,7 @@ impl Library {
         let app = self.get(id)?;
         let rec = self.db.get_source(id)?.ok_or_else(|| {
             Error::Source(format!(
-                "'{id}' has no update source; set one with `appimgr source set`"
+                "'{id}' has no update source; set one with `appofholding source set`"
             ))
         })?;
         let (version, digest) = self.installed_of(&app, &rec);
@@ -212,7 +213,7 @@ impl Library {
     pub fn skip_latest(&self, id: &str) -> Result<String> {
         let rec = self.source_or_err(id)?;
         let latest = rec.last_latest.ok_or_else(|| {
-            Error::Source("no version known yet; run `appimgr check` first".into())
+            Error::Source("no version known yet; run `appofholding check` first".into())
         })?;
         self.db.set_skipped(id, Some(&latest))?;
         Ok(latest)
@@ -305,6 +306,22 @@ impl Library {
             )));
         }
 
+        let hooks = self.db.list_hooks(id)?;
+        let hook = |kind: &str| {
+            hooks
+                .iter()
+                .find(|(k, _)| k == kind)
+                .map(|(_, c)| c.clone())
+        };
+        if let Some(cmd) = hook("pre-update") {
+            // A failing pre-update hook vetoes the update; nothing has been changed yet.
+            exec_hook(&app, "pre-update", &cmd).map_err(|e| {
+                Error::Other(format!(
+                    "{e}; update cancelled, your installed version is untouched"
+                ))
+            })?;
+        }
+
         let (installed_version, _) = self.installed_of(&app, &rec);
         self.swap_in(
             &app,
@@ -320,6 +337,13 @@ impl Library {
         self.db.set_notified(id, None)?;
         self.db.set_etag(id, None, None)?;
         let _ = fs::remove_dir_all(&dir);
+        if let Some(cmd) = hook("post-update") {
+            let now_installed = self.get(id)?;
+            if let Err(e) = exec_hook(&now_installed, "post-update", &cmd) {
+                // The update itself succeeded, so this is only reported.
+                self.warn(format!("{id}: {e}"));
+            }
+        }
         Ok(Applied::Updated {
             from: installed_version.or(app.version),
             to: tag,
@@ -374,7 +398,7 @@ impl Library {
         };
 
         // 2. Stage the new file beside the destination (same filesystem => atomic rename).
-        let stage = dir.join(format!(".{}.appimgr-new", file_name.to_string_lossy()));
+        let stage = dir.join(format!(".{}.appofholding-new", file_name.to_string_lossy()));
         let staged = (|| -> Result<()> {
             if fs::rename(new_file, &stage).is_err() {
                 fs::copy(new_file, &stage).map_err(Error::io(&stage))?;
@@ -577,7 +601,7 @@ impl Library {
             notifier.notify(
                 &format!("{name}: update available"),
                 &format!(
-                    "Version {version} is available. Run `appimgr update {id}` to install it."
+                    "Version {version} is available. Run `appofholding update {id}` to install it."
                 ),
             );
             self.db.set_notified(&id, Some(&version))?;
@@ -612,7 +636,8 @@ mod tests {
 
     fn env() -> Env {
         let tmp = tempfile::tempdir().unwrap();
-        let lib = Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appimgr")).unwrap();
+        let lib =
+            Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
         Env { tmp, lib }
     }
 
@@ -861,6 +886,53 @@ mod tests {
         assert_eq!(app.sha256, old.sha256);
         assert!(app.appimage_path.exists());
         assert!(e.lib.versions("foo-app").unwrap().is_empty());
+    }
+
+    #[test]
+    fn hooks_run_around_updates_and_a_failing_pre_update_vetoes_it() {
+        let e = env();
+        let old = installed(&e);
+        let log = e.tmp.path().join("hooks.log");
+        let append =
+            |kind: &str| format!("echo {kind}:$APPOFHOLDING_VERSION >> '{}'", log.display());
+        e.lib
+            .set_hook("foo-app", "pre-update", &append("pre"))
+            .unwrap();
+        e.lib
+            .set_hook("foo-app", "post-update", &append("post"))
+            .unwrap();
+        apply(&e, &github("2.0.0"), &ApplyOptions::default()).unwrap();
+        // pre sees the old version, post the new one.
+        assert_eq!(fs::read_to_string(&log).unwrap(), "pre:1.0.0\npost:2.0.0\n");
+        assert!(e.lib.take_warnings().is_empty());
+
+        // A failing pre-update hook cancels the next update before anything changes.
+        e.lib.set_hook("foo-app", "pre-update", "exit 1").unwrap();
+        let before = e.lib.get("foo-app").unwrap();
+        let err = apply(&e, &github("3.0.0"), &ApplyOptions::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("update cancelled"), "{err}");
+        let after = e.lib.get("foo-app").unwrap();
+        assert_eq!(
+            (before.sha256.as_str(), before.version.clone()),
+            (after.sha256.as_str(), after.version.clone())
+        );
+        assert_ne!(after.sha256, old.sha256);
+
+        // A failing post-update hook only produces a warning.
+        e.lib.set_hook("foo-app", "pre-update", "true").unwrap();
+        e.lib.set_hook("foo-app", "post-update", "exit 2").unwrap();
+        assert!(matches!(
+            apply(&e, &github("3.0.0"), &ApplyOptions::default()).unwrap(),
+            Applied::Updated { .. }
+        ));
+        let warnings = e.lib.take_warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("post-update hook failed"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

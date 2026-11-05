@@ -3,21 +3,24 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use appimgr_core::assets::{self, Arch, Selection};
-use appimgr_core::check::{self, Report};
-use appimgr_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
-use appimgr_core::http::UreqHttp;
-use appimgr_core::notify::NotifySend;
-use appimgr_core::schedule::{self, Interval};
-use appimgr_core::source::Policy;
-use appimgr_core::source::{self, Channel, Source};
-use appimgr_core::version::{Installed, Status};
-use appimgr_core::{AddOptions, Dirs, Install, Library, inspect};
+use appofholding_core::assets::{self, Arch, Selection};
+use appofholding_core::check::{self, Report};
+use appofholding_core::desktop;
+use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
+use appofholding_core::http::UreqHttp;
+use appofholding_core::launch;
+use appofholding_core::notify::NotifySend;
+use appofholding_core::profiles;
+use appofholding_core::schedule::{self, Interval};
+use appofholding_core::source::Policy;
+use appofholding_core::source::{self, Channel, Source};
+use appofholding_core::version::{Installed, Status};
+use appofholding_core::{AddOptions, Dirs, Install, Library, inspect};
 use clap::{Parser, Subcommand};
 
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
 #[derive(Parser)]
-#[command(name = "appimgr", version, about)]
+#[command(name = "appofholding", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -42,6 +45,9 @@ enum Cmd {
         /// Use this id instead of one derived from the app name.
         #[arg(long)]
         id: Option<String>,
+        /// Shell command to run once after adding (also kept as the app's post-install hook).
+        #[arg(long)]
+        post_install: Option<String>,
     },
     /// List apps in the library.
     List,
@@ -96,12 +102,103 @@ enum Cmd {
     /// Install or remove the systemd timer that checks for updates in the background.
     #[command(subcommand)]
     Schedule(ScheduleCmd),
-    /// Launch an app (this is what generated menu entries call).
+    /// View and change how an app is launched: arguments, environment, presets, hooks.
+    #[command(subcommand)]
+    Launch(LaunchCmd),
+    /// Launch an app (this is what generated menu entries call). Options must come before ID;
+    /// everything after ID is passed to the application.
     Run {
+        /// Use this launch profile instead of the default one.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Print the command instead of running it.
+        #[arg(long)]
+        print: bool,
         id: String,
         /// Arguments passed to the application.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LaunchCmd {
+    /// List the built-in presets (e.g. electron-wayland, x11, no-sandbox).
+    Presets,
+    /// List an app's launch profiles.
+    Profiles { id: String },
+    /// Show a profile and the exact command it produces.
+    Show {
+        id: String,
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Change a profile. Only the options you give are changed.
+    Set {
+        id: String,
+        /// Profile name (default: the profile used by the menu entry). Other names appear in the
+        /// app's right-click menu.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Extra arguments, quoted as one string: --args '--foo "a b"'
+        #[arg(long, allow_hyphen_values = true)]
+        args: Option<String>,
+        /// Environment variable NAME=value (repeat; replaces the existing set).
+        #[arg(long)]
+        env: Vec<String>,
+        /// Command to run the app under, e.g. --prefix 'gamemoderun'
+        #[arg(long, allow_hyphen_values = true)]
+        prefix: Option<String>,
+        /// Working directory.
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long)]
+        clear_cwd: bool,
+        /// Preset to apply (repeat; replaces the existing set). See `launch presets`.
+        #[arg(long)]
+        preset: Vec<String>,
+        #[arg(long)]
+        clear_presets: bool,
+        /// Unpack and run instead of mounting (no FUSE needed).
+        #[arg(long)]
+        extract_and_run: Option<bool>,
+        /// Start as root via run0/pkexec. Off by default.
+        #[arg(long)]
+        elevated: Option<bool>,
+        /// Start from an empty profile before applying the options.
+        #[arg(long)]
+        reset: bool,
+    },
+    /// Delete a profile (deleting `default` clears its settings).
+    Delete {
+        id: String,
+        #[arg(long)]
+        profile: String,
+    },
+    /// Commands that run at install/update time.
+    #[command(subcommand)]
+    Hook(HookCmd),
+}
+
+#[derive(Subcommand)]
+enum HookCmd {
+    Show {
+        id: String,
+    },
+    /// KIND is post-install, pre-update or post-update; a failing pre-update hook cancels the update.
+    Set {
+        id: String,
+        kind: String,
+        command: String,
+    },
+    Clear {
+        id: String,
+        kind: String,
+    },
+    /// Run a hook now.
+    Run {
+        id: String,
+        kind: String,
     },
 }
 
@@ -214,6 +311,210 @@ fn progress() -> impl FnMut(u64, Option<u64>) {
     }
 }
 
+fn print_warnings(lib: &Library) {
+    for w in lib.take_warnings() {
+        eprintln!("warning: {w}");
+    }
+}
+
+fn kv(s: &str) -> Result<(String, String)> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .with_context(|| format!("'{s}' should look like NAME=value"))
+}
+
+fn launch_cmd(cmd: LaunchCmd) -> Result<()> {
+    match cmd {
+        LaunchCmd::Presets => {
+            for p in launch::PRESETS {
+                println!("{:<18} {}", p.name, p.description);
+                let mut what: Vec<String> = p.args.iter().map(|a| a.to_string()).collect();
+                what.extend(p.env.iter().map(|(k, v)| format!("{k}={v}")));
+                if !what.is_empty() {
+                    println!("{:<18} adds: {}", "", what.join(" "));
+                }
+            }
+        }
+        LaunchCmd::Profiles { id } => {
+            let lib = library()?;
+            let list = lib.profiles(&id)?;
+            if list.is_empty() {
+                println!("{id}: nothing configured (default profile is empty)");
+            }
+            for (name, p) in list {
+                println!(
+                    "{name}: {} arg(s), {} env var(s), presets [{}]",
+                    p.args.len(),
+                    p.env.len(),
+                    p.presets.join(", ")
+                );
+            }
+        }
+        LaunchCmd::Show { id, profile } => {
+            let lib = library()?;
+            let name = profile.as_deref().unwrap_or(launch::DEFAULT_PROFILE);
+            let p = lib.profile(&id, name)?;
+            println!("profile:        {name}");
+            println!(
+                "presets:        {}",
+                if p.presets.is_empty() {
+                    "-".into()
+                } else {
+                    p.presets.join(", ")
+                }
+            );
+            println!(
+                "args:           {}",
+                if p.args.is_empty() {
+                    "-".into()
+                } else {
+                    desktop::join_exec(&p.args)
+                }
+            );
+            println!(
+                "env:            {}",
+                if p.env.is_empty() {
+                    "-".into()
+                } else {
+                    p.env
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            );
+            println!(
+                "prefix:         {}",
+                if p.prefix.is_empty() {
+                    "-".into()
+                } else {
+                    desktop::join_exec(&p.prefix)
+                }
+            );
+            println!(
+                "working dir:    {}",
+                p.cwd
+                    .as_ref()
+                    .map_or("-".into(), |d| d.display().to_string())
+            );
+            println!("extract & run:  {}", p.extract_and_run);
+            println!("elevated:       {}", p.elevated);
+            let session: Vec<(String, String)> = vec![];
+            match lib.plan_launch(&id, Some(name), &[], launch::detect_elevator(), &session) {
+                Ok(plan) => println!("\ncommand:\n  {}", plan.display()),
+                Err(e) => println!("\ncommand: ({e})"),
+            }
+        }
+        LaunchCmd::Set {
+            id,
+            profile,
+            args,
+            env,
+            prefix,
+            cwd,
+            clear_cwd,
+            preset,
+            clear_presets,
+            extract_and_run,
+            elevated,
+            reset,
+        } => {
+            let lib = library()?;
+            let name = profile.unwrap_or_else(|| launch::DEFAULT_PROFILE.to_string());
+            let mut p = if reset {
+                launch::Profile::default()
+            } else {
+                lib.profile(&id, &name).unwrap_or_default()
+            };
+            if let Some(a) = args {
+                p.args = desktop::split_exec(&a);
+            }
+            if !env.is_empty() {
+                p.env = env.iter().map(|s| kv(s)).collect::<Result<_>>()?;
+            }
+            if let Some(x) = prefix {
+                p.prefix = desktop::split_exec(&x);
+            }
+            if clear_cwd {
+                p.cwd = None;
+            }
+            if let Some(c) = cwd {
+                p.cwd = Some(PathBuf::from(c));
+            }
+            if clear_presets {
+                p.presets.clear();
+            }
+            if !preset.is_empty() {
+                p.presets = preset;
+            }
+            if let Some(v) = extract_and_run {
+                p.extract_and_run = v;
+            }
+            if let Some(v) = elevated {
+                p.elevated = v;
+            }
+            lib.set_profile(&id, &name, &p)?;
+            println!("{id}: saved launch profile '{name}'");
+            if p.elevated {
+                println!("note: this profile starts the app as root through run0/pkexec");
+            }
+        }
+        LaunchCmd::Delete { id, profile } => {
+            let removed = library()?.delete_profile(&id, &profile)?;
+            println!(
+                "{}",
+                if removed {
+                    "Profile removed."
+                } else {
+                    "No such profile."
+                }
+            );
+        }
+        LaunchCmd::Hook(h) => hook_cmd(h)?,
+    }
+    Ok(())
+}
+
+fn hook_cmd(cmd: HookCmd) -> Result<()> {
+    let lib = library()?;
+    match cmd {
+        HookCmd::Show { id } => {
+            let hooks = lib.hooks(&id)?;
+            if hooks.is_empty() {
+                println!(
+                    "{id}: no hooks set (kinds: {})",
+                    profiles::HOOK_KINDS.join(", ")
+                );
+            }
+            for (k, c) in hooks {
+                println!("{k:<13} {c}");
+            }
+        }
+        HookCmd::Set { id, kind, command } => {
+            lib.set_hook(&id, &kind, &command)?;
+            println!("{id}: {kind} hook saved");
+        }
+        HookCmd::Clear { id, kind } => {
+            println!(
+                "{}",
+                if lib.clear_hook(&id, &kind)? {
+                    "Hook removed."
+                } else {
+                    "No such hook."
+                }
+            );
+        }
+        HookCmd::Run { id, kind } => {
+            if lib.run_hook(&id, &kind)? {
+                println!("{kind} hook finished");
+            } else {
+                println!("{id} has no {kind} hook");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn describe_outcome(o: &Outcome) -> String {
     match o {
         Outcome::Updated { id, from, to } => {
@@ -254,19 +555,19 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
             println!("Wrote {}\n      {}", svc.display(), timer.display());
             if dirs.refresh_caches {
                 if systemctl(&["daemon-reload"])
-                    && systemctl(&["enable", "--now", "appimgr-update.timer"])
+                    && systemctl(&["enable", "--now", "appofholding-update.timer"])
                 {
                     println!("Background checks are on ({interval}).");
                 } else {
                     println!(
-                        "Could not enable the timer; run: systemctl --user enable --now appimgr-update.timer"
+                        "Could not enable the timer; run: systemctl --user enable --now appofholding-update.timer"
                     );
                 }
             }
         }
         ScheduleCmd::Remove => {
             if dirs.refresh_caches {
-                systemctl(&["disable", "--now", "appimgr-update.timer"]);
+                systemctl(&["disable", "--now", "appofholding-update.timer"]);
             }
             let removed = schedule::remove_units(&dirs)?;
             if dirs.refresh_caches {
@@ -292,7 +593,7 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
                 }
             );
             if dirs.refresh_caches {
-                systemctl(&["list-timers", "appimgr-update.timer", "--no-pager"]);
+                systemctl(&["list-timers", "appofholding-update.timer", "--no-pager"]);
             }
         }
     }
@@ -348,7 +649,7 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
             let parsed = build_source(&input, asset, channel)?;
             lib.set_source(&id, &parsed.source)?;
             println!("{id} now updates from {}", parsed.source.describe());
-            println!("Run `appimgr source test {id}` to verify it.");
+            println!("Run `appofholding source test {id}` to verify it.");
         }
         SourceCmd::Clear { id } => {
             let removed = library()?.clear_source(&id)?;
@@ -407,8 +708,8 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
 }
 
 fn dirs() -> Result<Dirs> {
-    // APPIMGR_ROOT redirects everything into one directory (used by tests and for experiments).
-    match std::env::var_os("APPIMGR_ROOT") {
+    // APPOFHOLDING_ROOT redirects everything into one directory (used by tests and for experiments).
+    match std::env::var_os("APPOFHOLDING_ROOT") {
         Some(root) => Ok(Dirs::with_root(&PathBuf::from(root))),
         None => Ok(Dirs::from_env()?),
     }
@@ -427,6 +728,7 @@ fn main() -> Result<()> {
             channel,
             move_file,
             id,
+            post_install,
         } => {
             let opts = AddOptions {
                 install: if move_file {
@@ -458,11 +760,16 @@ fn main() -> Result<()> {
             if let Some(s) = lib.source(&rec.id)? {
                 println!("  updates: {}", s.source.describe());
             }
+            if let Some(cmd) = post_install {
+                lib.set_hook(&rec.id, "post-install", &cmd)?;
+                lib.run_hook(&rec.id, "post-install")?;
+                println!("  post-install hook ran");
+            }
         }
         Cmd::List => {
             let apps = library()?.list()?;
             if apps.is_empty() {
-                println!("No apps yet. Add one with: appimgr add <file>");
+                println!("No apps yet. Add one with: appofholding add <file>");
             }
             for a in apps {
                 println!(
@@ -523,7 +830,7 @@ fn main() -> Result<()> {
             };
             if ids.is_empty() {
                 println!(
-                    "No apps have an update source yet. Use `appimgr source set <id> <link>`."
+                    "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
             }
             for i in ids {
@@ -570,7 +877,7 @@ fn main() -> Result<()> {
             };
             if ids.is_empty() {
                 println!(
-                    "No apps have an update source yet. Use `appimgr source set <id> <link>`."
+                    "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
             }
             let mut failed = false;
@@ -599,6 +906,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            print_warnings(&lib);
             if failed {
                 bail!("some updates failed");
             }
@@ -646,11 +954,32 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Schedule(cmd) => schedule_cmd(cmd)?,
-        Cmd::Run { id, args } => {
-            let rec = library()?.get(&id)?;
-            // M4 will add launch profiles and sandboxing here; for now just exec the AppImage.
-            let err = Command::new(&rec.appimage_path).args(args).exec();
-            bail!("failed to launch {}: {err}", rec.appimage_path.display());
+        Cmd::Launch(cmd) => launch_cmd(cmd)?,
+        Cmd::Run {
+            profile,
+            print,
+            id,
+            args,
+        } => {
+            let lib = library()?;
+            let session: Vec<(String, String)> = launch::SESSION_ENV
+                .iter()
+                .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+                .collect();
+            // M5 adds sandboxing here; today the plan is arguments, environment, prefix and cwd.
+            let plan = lib.plan_launch(
+                &id,
+                profile.as_deref(),
+                &args,
+                launch::detect_elevator(),
+                &session,
+            )?;
+            if print {
+                println!("{}", plan.display());
+                return Ok(());
+            }
+            let err = plan.command().exec();
+            bail!("failed to launch {}: {err}", plan.argv[0]);
         }
     }
     Ok(())

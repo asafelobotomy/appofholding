@@ -110,6 +110,16 @@ impl DesktopEntry {
         }
     }
 
+    /// Append a new, empty group (no-op if it exists).
+    pub fn add_group(&mut self, name: &str) {
+        if self.group(name).is_none() {
+            self.groups.push(Group {
+                name: name.to_string(),
+                lines: vec![],
+            });
+        }
+    }
+
     /// Names of `[Desktop Action X]` groups.
     pub fn action_groups(&self) -> Vec<String> {
         self.groups
@@ -244,6 +254,21 @@ mod tests {
         assert!(!r.contains("Type=Application"));
         // New keys stay inside their group, before the blank separator.
         assert!(r.find("StartupNotify").unwrap() < r.find("[Desktop Action new]").unwrap());
+    }
+
+    #[test]
+    fn add_group_and_keys() {
+        let mut e = DesktopEntry::parse(SAMPLE).unwrap();
+        e.add_group("Desktop Action extra");
+        e.add_group("Desktop Action extra"); // idempotent
+        e.set("Desktop Action extra", "Name", "Extra");
+        e.set("Desktop Action extra", "Exec", "x");
+        let r = e.render();
+        assert_eq!(r.matches("[Desktop Action extra]").count(), 1);
+        assert!(
+            r.ends_with("[Desktop Action extra]\nName=Extra\nExec=x\n"),
+            "{r}"
+        );
     }
 
     #[test]

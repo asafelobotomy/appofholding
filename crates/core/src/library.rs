@@ -129,6 +129,7 @@ pub fn integrate_entry(
     id: &str,
     exec_bin: &Path,
     icon_installed: bool,
+    profiles: &[String],
 ) -> String {
     let mut e = entry.clone();
     let wrap = |original: Option<&str>| -> String {
@@ -151,25 +152,55 @@ pub fn integrate_entry(
     if e.main("StartupNotify").is_none() {
         e.set(MAIN, "StartupNotify", "true");
     }
-    e.set(MAIN, "X-AppImgr-Id", id);
+    e.set(MAIN, "X-AppOfHolding-Id", id);
     for g in e.action_groups() {
         let new = wrap(entry.get(&g, "Exec"));
         e.set(&g, "Exec", &new);
+    }
+    // Each extra launch profile becomes an entry in the app's right-click menu.
+    if !profiles.is_empty() {
+        let mut actions = entry.main("Actions").unwrap_or("").to_string();
+        for name in profiles {
+            let key = format!("appofholding-{name}");
+            let group = format!("Desktop Action {key}");
+            if !actions.is_empty() && !actions.ends_with(';') {
+                actions.push(';');
+            }
+            actions.push_str(&format!("{key};"));
+            e.add_group(&group);
+            e.set(&group, "Name", &format!("Launch: {name}"));
+            let exec = desktop::join_exec(&[
+                exec_bin.to_string_lossy().into_owned(),
+                "run".into(),
+                "--profile".into(),
+                name.clone(),
+                id.to_string(),
+                "%U".into(),
+            ]);
+            e.set(&group, "Exec", &exec);
+        }
+        e.set(MAIN, "Actions", &actions);
     }
     e.render()
 }
 
 pub struct Library {
     pub dirs: Dirs,
-    /// Absolute path to the `appimgr` binary written into `Exec=` lines.
+    /// Absolute path to the `appofholding` binary written into `Exec=` lines.
     pub exec_bin: PathBuf,
     pub(crate) db: Db,
+    pub(crate) warnings: std::cell::RefCell<Vec<String>>,
 }
 
 impl Library {
     pub fn open(dirs: Dirs, exec_bin: PathBuf) -> Result<Self> {
         let db = Db::open(&dirs.db_path())?;
-        Ok(Self { dirs, exec_bin, db })
+        Ok(Self {
+            dirs,
+            exec_bin,
+            db,
+            warnings: Default::default(),
+        })
     }
 
     pub fn list(&self) -> Result<Vec<AppRecord>> {
@@ -313,7 +344,14 @@ impl Library {
             }
             None => None,
         };
-        let text = integrate_entry(&ins.entry, id, &self.exec_bin, icon_file.is_some());
+        let extra: Vec<String> = self
+            .db
+            .list_profiles(id)?
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n != crate::launch::DEFAULT_PROFILE)
+            .collect();
+        let text = integrate_entry(&ins.entry, id, &self.exec_bin, icon_file.is_some(), &extra);
         let desktop_file = self.dirs.desktop_file(id);
         write_atomic(&desktop_file, text.as_bytes())?;
         Ok((desktop_file, icon_file))
@@ -350,6 +388,10 @@ impl Library {
         self.db.delete(id)?;
         self.refresh_caches();
         Ok(rec)
+    }
+
+    pub(crate) fn refresh_caches_public(&self) {
+        self.refresh_caches();
     }
 
     fn refresh_caches(&self) {
@@ -389,7 +431,7 @@ mod tests {
         // A path with a space exercises Exec quoting.
         let root = tmp.path().join("my root");
         fs::create_dir_all(&root).unwrap();
-        let lib = Library::open(Dirs::with_root(&root), root.join("bin/appimgr")).unwrap();
+        let lib = Library::open(Dirs::with_root(&root), root.join("bin/appofholding")).unwrap();
         Env {
             _tmp: tmp,
             root,
@@ -453,7 +495,7 @@ mod tests {
             rec.icon_file
                 .as_ref()
                 .unwrap()
-                .ends_with("hicolor/256x256/apps/appimgr-foo-app.png")
+                .ends_with("hicolor/256x256/apps/appofholding-foo-app.png")
         );
         assert!(rec.icon_file.as_ref().unwrap().exists());
 
@@ -462,9 +504,9 @@ mod tests {
         let exec = desktop::split_exec(d.main("Exec").unwrap());
         assert_eq!(exec[0], e.lib.exec_bin.to_string_lossy());
         assert_eq!(&exec[1..], ["run", "foo-app", "--flag", "%U"]);
-        assert_eq!(d.main("Icon"), Some("appimgr-foo-app"));
+        assert_eq!(d.main("Icon"), Some("appofholding-foo-app"));
         assert_eq!(d.main("Categories"), Some("Utility;"));
-        assert_eq!(d.main("X-AppImgr-Id"), Some("foo-app"));
+        assert_eq!(d.main("X-AppOfHolding-Id"), Some("foo-app"));
         assert_eq!(d.main("StartupNotify"), Some("true"));
         // Desktop actions survive, rewired through our launcher.
         let action = desktop::split_exec(d.get("Desktop Action new", "Exec").unwrap());

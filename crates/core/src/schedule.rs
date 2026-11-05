@@ -1,4 +1,4 @@
-//! systemd user timer that runs `appimgr update --scheduled`.
+//! systemd user timer that runs `appofholding update --scheduled`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::library::write_atomic;
 use crate::paths::Dirs;
 
-pub const UNIT_NAME: &str = "appimgr-update";
+pub const UNIT_NAME: &str = "appofholding-update";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
@@ -37,7 +37,7 @@ impl Interval {
 
 pub fn service_text(exec_bin: &Path) -> String {
     format!(
-        "[Unit]\nDescription=appimgr: check AppImages for updates\nAfter=network-online.target\n\n\
+        "[Unit]\nDescription=appofholding: check AppImages for updates\nAfter=network-online.target\n\n\
          [Service]\nType=oneshot\nExecStart={} update --scheduled\nNice=10\n",
         quote_exec_arg(&exec_bin.to_string_lossy())
     )
@@ -45,7 +45,7 @@ pub fn service_text(exec_bin: &Path) -> String {
 
 pub fn timer_text(interval: Interval) -> String {
     format!(
-        "[Unit]\nDescription=appimgr: periodic AppImage update check\n\n\
+        "[Unit]\nDescription=appofholding: periodic AppImage update check\n\n\
          [Timer]\nOnCalendar={}\n# Run at the next opportunity if the machine was off.\nPersistent=true\nRandomizedDelaySec=15m\n\n\
          [Install]\nWantedBy=timers.target\n",
         interval.calendar()
@@ -64,7 +64,7 @@ pub fn unit_paths(dirs: &Dirs) -> (PathBuf, PathBuf) {
 pub fn write_units(dirs: &Dirs, exec_bin: &Path, interval: Interval) -> Result<(PathBuf, PathBuf)> {
     if !exec_bin.is_absolute() {
         return Err(Error::Other(
-            "the updater needs an absolute path to appimgr".into(),
+            "the updater needs an absolute path to appofholding".into(),
         ));
     }
     let (svc, timer) = unit_paths(dirs);
@@ -92,9 +92,9 @@ mod tests {
 
     #[test]
     fn unit_text() {
-        let s = service_text(Path::new("/home/u/My Apps/appimgr"));
+        let s = service_text(Path::new("/home/u/My Apps/appofholding"));
         assert!(
-            s.contains("ExecStart=\"/home/u/My Apps/appimgr\" update --scheduled"),
+            s.contains("ExecStart=\"/home/u/My Apps/appofholding\" update --scheduled"),
             "{s}"
         );
         let t = timer_text(Interval::Weekly);
@@ -112,11 +112,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = Dirs::with_root(tmp.path());
         let (svc, timer) =
-            write_units(&dirs, Path::new("/usr/bin/appimgr"), Interval::Daily).unwrap();
+            write_units(&dirs, Path::new("/usr/bin/appofholding"), Interval::Daily).unwrap();
         assert!(svc.exists() && timer.exists());
         assert!(svc.starts_with(tmp.path().join("config/systemd/user")));
         assert!(remove_units(&dirs).unwrap());
         assert!(!remove_units(&dirs).unwrap());
-        assert!(write_units(&dirs, Path::new("relative/appimgr"), Interval::Daily).is_err());
+        assert!(write_units(&dirs, Path::new("relative/appofholding"), Interval::Daily).is_err());
     }
 }

@@ -1,4 +1,4 @@
-//! appimgr core: AppImage parsing, library database and desktop integration.
+//! appofholding core: AppImage parsing, library database and desktop integration.
 
 pub mod assets;
 pub mod check;
@@ -14,9 +14,11 @@ pub mod fixture;
 pub mod http;
 pub mod icon;
 pub mod image;
+pub mod launch;
 pub mod library;
 pub mod notify;
 pub mod paths;
+pub mod profiles;
 pub mod providers;
 pub mod running;
 pub mod schedule;

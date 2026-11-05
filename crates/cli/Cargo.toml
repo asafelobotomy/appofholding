@@ -1,15 +1,15 @@
 [package]
-name = "appimgr"
-description = "Command line interface for appimgr"
+name = "appofholding"
+description = "Command line interface for appofholding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-appimgr-core = { path = "../core" }
+appofholding-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
-appimgr-core = { path = "../core", features = ["fixtures"] }
+appofholding-core = { path = "../core", features = ["fixtures"] }
 tempfile = "3.27.0"

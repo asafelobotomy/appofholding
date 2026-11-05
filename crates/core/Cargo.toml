@@ -1,6 +1,6 @@
 [package]
-name = "appimgr-core"
-description = "Core library for appimgr: AppImage parsing, library database, desktop integration"
+name = "appofholding-core"
+description = "Core library for appofholding: AppImage parsing, library database, desktop integration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

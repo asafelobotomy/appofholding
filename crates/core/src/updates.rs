@@ -134,7 +134,8 @@ mod tests {
 
     fn env() -> Env {
         let tmp = tempfile::tempdir().unwrap();
-        let lib = Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appimgr")).unwrap();
+        let lib =
+            Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
         Env { _tmp: tmp, lib }
     }
 

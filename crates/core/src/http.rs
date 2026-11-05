@@ -42,7 +42,7 @@ pub struct UreqHttp {
     agent: ureq::Agent,
 }
 
-const USER_AGENT: &str = concat!("appimgr/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("appofholding/", env!("CARGO_PKG_VERSION"));
 
 impl Default for UreqHttp {
     fn default() -> Self {
