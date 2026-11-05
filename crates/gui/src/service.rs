@@ -313,6 +313,31 @@ pub fn remove_app(lib: &Library, id: &str, purge: bool) -> Res<()> {
     Ok(())
 }
 
+/// Colour themes the interface offers; the first is "follow the desktop".
+pub const THEMES: [&str; 3] = ["system", "gruvbox-dark", "gruvbox-light"];
+
+fn theme_file(dirs: &Dirs) -> std::path::PathBuf {
+    dirs.config_home.join("appofholding").join("gui-theme")
+}
+
+/// The saved colour theme; anything missing or unrecognised means "system".
+pub fn theme_load(dirs: &Dirs) -> String {
+    std::fs::read_to_string(theme_file(dirs))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| THEMES.contains(&t.as_str()))
+        .unwrap_or_else(|| THEMES[0].to_string())
+}
+
+pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
+    if !THEMES.contains(&name) {
+        return Err(format!("unknown theme '{name}'"));
+    }
+    let f = theme_file(dirs);
+    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
+    std::fs::write(f, format!("{name}\n")).map_err(e)
+}
+
 pub fn schedule_status(dirs: &Dirs) -> Value {
     let (svc, timer) = schedule::unit_paths(dirs);
     json!({ "installed": svc.exists() && timer.exists() })
@@ -669,6 +694,18 @@ mod tests {
         let lib =
             Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
         (tmp, lib)
+    }
+
+    #[test]
+    fn the_theme_choice_is_saved_and_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::with_root(tmp.path());
+        assert_eq!(theme_load(&dirs), "system");
+        theme_save(&dirs, "gruvbox-light").unwrap();
+        assert_eq!(theme_load(&dirs), "gruvbox-light");
+        assert!(theme_save(&dirs, "../evil").is_err());
+        std::fs::write(theme_file(&dirs), "garbage").unwrap();
+        assert_eq!(theme_load(&dirs), "system");
     }
 
     fn add_foo(tmp: &Path, lib: &Library) {

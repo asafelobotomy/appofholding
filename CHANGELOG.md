@@ -11,6 +11,10 @@
 
 - Redesigned interface: grouped app list with status at a glance, app tiles, a tabbed detail page
   (Overview, Updates, Launch, Sandbox) built from cards, and a narrow-window layout.
+- Colour themes: Gruvbox light and dark, chosen in Settings > Appearance (applies on the next
+  start). "Follow the system" stays the default.
+- Import dialog: a clear "nothing to import" state, select all / none, plural-correct wording and
+  card rows; action buttons use the new primary style.
 - Internal: lint clean (clippy) across the workspace.
 
 ## 0.2.0

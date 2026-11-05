@@ -168,10 +168,9 @@ ColumnLayout {
             text: qsTr("The app gets full control of your system. It cannot be combined with a sandbox.")
         }
         RowLayout {
-            QQC2.Button {
+            PrimaryButton {
                 text: qsTr("Save")
                 icon.name: "document-save"
-                highlighted: true
                 onClicked: {
                     var err = sec.backend.saveProfile(sec.appId, sec.profileName, JSON.stringify(sec.collect()))
                     sec.notify(err)

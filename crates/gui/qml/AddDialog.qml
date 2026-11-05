@@ -125,10 +125,9 @@ Kirigami.Dialog {
                 enabled: link.text.length > 0 && !dialog.installing && !applicationWindow().working
                 onClicked: dialog.resolve()
             }
-            QQC2.Button {
+            PrimaryButton {
                 text: qsTr("Download and add")
                 icon.name: "download"
-                highlighted: true
                 enabled: !!dialog.resolved && !dialog.resolved.problem && !dialog.installing
                 onClicked: dialog.install()
             }

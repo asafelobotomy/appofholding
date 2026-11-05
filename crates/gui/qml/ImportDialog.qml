@@ -33,6 +33,13 @@ Kirigami.Dialog {
     readonly property int replacesCount: chosen.reduce(function (n, i) { return n + i.replaces }, 0)
     readonly property int twiceCount: chosen.filter(function (i) { return (i.owner === "tool" || i.owner === "entry") && i.replaces === 0 }).length
 
+    function plural(n, one, other) { return (n === 1 ? one : other).arg(n) }
+    function setAll(value) {
+        var s = ({})
+        for (var i = 0; i < plan.items.length; i++) s[plan.items[i].path] = value && plan.items[i].action !== "skip"
+        selected = s
+    }
+
     function options() {
         return JSON.stringify({mode: modes[modeBox.currentIndex], replaceEntries: replaceBox.checked})
     }
@@ -144,12 +151,27 @@ Kirigami.Dialog {
             Layout.fillHeight: true
             spacing: Kirigami.Units.smallSpacing
 
+            // Nothing to import
+            ColumnLayout {
+                visible: dialog.plan.items.length === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Item { Layout.fillHeight: true }
+                Kirigami.PlaceholderMessage {
+                    Layout.fillWidth: true
+                    icon.name: "checkmark"
+                    text: qsTr("Nothing to import")
+                    explanation: qsTr("No AppImages that are not already in your library were found in %1.").arg(dialog.plan.searched.map(dialog.tilde).join(", "))
+                }
+                Item { Layout.fillHeight: true }
+            }
+
             QQC2.Label {
+                visible: dialog.plan.items.length > 0
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: dialog.plan.items.length === 0
-                    ? qsTr("No importable AppImages were found in %1.").arg(dialog.plan.searched.map(dialog.tilde).join(", "))
-                    : qsTr("Found %1 AppImage(s) in %2. Nothing has been changed yet — choose what to import, then confirm.").arg(dialog.plan.items.length).arg(dialog.plan.searched.map(dialog.tilde).join(", "))
+                text: dialog.plural(dialog.plan.items.length, qsTr("Found %1 AppImage in %2."), qsTr("Found %1 AppImages in %2.")).arg(dialog.plan.searched.map(dialog.tilde).join(", "))
+                    + " " + qsTr("Nothing has been changed yet — choose what to import, then confirm.")
             }
 
             RowLayout {
@@ -158,6 +180,7 @@ Kirigami.Dialog {
                 QQC2.Label { text: qsTr("Files:") }
                 QQC2.ComboBox {
                     id: modeBox
+                    implicitContentWidthPolicy: QQC2.ComboBox.WidestText
                     model: [qsTr("Smart (Downloads are moved, others stay)"), qsTr("Leave where they are"), qsTr("Copy into the library"), qsTr("Move into the library")]
                     onActivated: dialog.scan()
                 }
@@ -170,6 +193,14 @@ Kirigami.Dialog {
                 }
             }
 
+            RowLayout {
+                visible: dialog.plan.items.length > 0
+                QQC2.Label { text: qsTr("%1 selected").arg(dialog.chosen.length); opacity: 0.7 }
+                Item { Layout.fillWidth: true }
+                QQC2.Button { flat: true; text: qsTr("Select all"); onClicked: dialog.setAll(true) }
+                QQC2.Button { flat: true; text: qsTr("Select none"); onClicked: dialog.setAll(false) }
+            }
+
             QQC2.ScrollView {
                 visible: dialog.plan.items.length > 0
                 Layout.fillWidth: true
@@ -178,9 +209,21 @@ Kirigami.Dialog {
                 ListView {
                     model: dialog.plan.items
                     spacing: Kirigami.Units.smallSpacing
-                    delegate: ColumnLayout {
+                    delegate: Rectangle {
+                        id: row
                         required property var modelData
                         width: ListView.view ? ListView.view.width - Kirigami.Units.gridUnit : 0
+                        implicitHeight: rowColumn.implicitHeight + Kirigami.Units.smallSpacing * 2
+                        height: implicitHeight
+                        radius: Kirigami.Units.cornerRadius
+                        color: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.045)
+                        border.width: 1
+                        border.color: !!dialog.selected[modelData.path]
+                            ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.highlightColor, 0.7)
+                            : Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.12)
+                        ColumnLayout {
+                        id: rowColumn
+                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: Kirigami.Units.smallSpacing }
                         spacing: 0
                         RowLayout {
                             Layout.fillWidth: true
@@ -193,13 +236,13 @@ Kirigami.Dialog {
                                 Layout.fillWidth: true
                                 spacing: 0
                                 QQC2.Label {
-                                    text: modelData.name + (modelData.version ? "  " + modelData.version : "") + "   ·   " + dialog.ownerText(modelData)
+                                    text: modelData.name + (modelData.version ? "  " + modelData.version : "")
                                     font.bold: true
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
                                 QQC2.Label {
-                                    text: dialog.tilde(modelData.path)
+                                    text: dialog.ownerText(modelData) + "  ·  " + dialog.tilde(modelData.path)
                                     opacity: 0.7
                                     elide: Text.ElideMiddle
                                     Layout.fillWidth: true
@@ -233,13 +276,14 @@ Kirigami.Dialog {
                             Layout.fillWidth: true
                             Layout.leftMargin: Kirigami.Units.gridUnit * 2
                         }
+                        }
                     }
                 }
             }
 
             QQC2.Label {
                 visible: dialog.plan.skipped.length > 0
-                text: qsTr("%1 other file(s) were found but are not eligible (not AppImages, or already imported).").arg(dialog.plan.skipped.length)
+                text: dialog.plural(dialog.plan.skipped.length, qsTr("%1 other file was found but is not eligible (not an AppImage, or already imported)."), qsTr("%1 other files were found but are not eligible (not AppImages, or already imported)."))
                 opacity: 0.6
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -247,11 +291,11 @@ Kirigami.Dialog {
 
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                QQC2.Button { text: qsTr("Cancel"); onClicked: dialog.close() }
-                QQC2.Button {
-                    text: qsTr("Review %1 import(s)…").arg(dialog.chosen.length)
+                QQC2.Button { text: dialog.plan.items.length === 0 ? qsTr("Close") : qsTr("Cancel"); onClicked: dialog.close() }
+                PrimaryButton {
+                    visible: dialog.plan.items.length > 0
+                    text: dialog.plural(dialog.chosen.length, qsTr("Review %1 import…"), qsTr("Review %1 imports…"))
                     icon.name: "dialog-ok"
-                    highlighted: true
                     enabled: dialog.chosen.length > 0
                     onClicked: dialog.phase = "confirm"
                 }
@@ -264,7 +308,7 @@ Kirigami.Dialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Kirigami.Units.largeSpacing
-            Kirigami.Heading { text: qsTr("Import %1 app(s)?").arg(dialog.chosen.length); level: 2 }
+            Kirigami.Heading { text: dialog.plural(dialog.chosen.length, qsTr("Import %1 app?"), qsTr("Import %1 apps?")); level: 2 }
             Repeater {
                 model: [
                     {n: dialog.staysCount, text: qsTr("%1 file(s) stay where they are.")},
@@ -291,10 +335,9 @@ Kirigami.Dialog {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 QQC2.Button { text: qsTr("Back"); onClicked: dialog.phase = "plan" }
-                QQC2.Button {
+                PrimaryButton {
                     text: qsTr("Yes, import")
                     icon.name: "document-import"
-                    highlighted: true
                     onClicked: dialog.run()
                 }
             }
@@ -337,7 +380,7 @@ Kirigami.Dialog {
                         applicationWindow().showPassiveNotification(r.error ? r.error : qsTr("Restored %1 menu entr(ies)").arg(r.restored))
                     }
                 }
-                QQC2.Button { text: qsTr("Done"); icon.name: "dialog-ok"; highlighted: true; onClicked: dialog.close() }
+                PrimaryButton { text: qsTr("Done"); icon.name: "dialog-ok"; onClicked: dialog.close() }
             }
         }
     }

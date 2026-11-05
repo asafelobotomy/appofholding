@@ -3,7 +3,7 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
-Kirigami.ScrollablePage {
+ThemedPage {
     id: page
     title: qsTr("Settings")
     readonly property var backend: applicationWindow().backendObject
@@ -17,6 +17,22 @@ Kirigami.ScrollablePage {
 
         Section {
             first: true
+            title: qsTr("Appearance")
+            subtitle: qsTr("Pick a colour theme. Changes apply the next time appOFholding starts.")
+            QQC2.ComboBox {
+                id: themeBox
+                Layout.fillWidth: true
+                model: Themes.labels
+                currentIndex: Math.max(0, Themes.names.indexOf(applicationWindow().themeName))
+                onActivated: {
+                    var err = page.backend.setTheme(Themes.names[currentIndex])
+                    if (err) applicationWindow().showPassiveNotification(err)
+                    else applicationWindow().showPassiveNotification(qsTr("Restart appOFholding to see the new theme."))
+                }
+            }
+        }
+
+        Section {
             title: qsTr("Automatic update checks")
             subtitle: qsTr("A background timer checks your apps for updates and installs the ones set to update automatically. Apps set to notify get one notification per new version.")
 

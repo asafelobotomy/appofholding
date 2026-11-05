@@ -87,6 +87,12 @@ pub mod qobject {
         #[cxx_name = "scheduleRemove"]
         #[qinvokable]
         fn schedule_remove(self: &Backend) -> QString;
+        /// The saved colour theme: system, gruvbox-dark or gruvbox-light.
+        #[qinvokable]
+        fn theme(self: &Backend) -> QString;
+        #[cxx_name = "setTheme"]
+        #[qinvokable]
+        fn set_theme(self: &Backend, name: &QString) -> QString;
         #[cxx_name = "importRestore"]
         #[qinvokable]
         fn import_restore(self: &Backend) -> QString;
@@ -279,6 +285,16 @@ impl qobject::Backend {
                 .and_then(|d| service::schedule_remove(&d)),
         )
     }
+    pub fn theme(&self) -> QString {
+        q(&current_theme())
+    }
+    pub fn set_theme(&self, name: &QString) -> QString {
+        unit(
+            appofholding_core::Dirs::detect()
+                .map_err(|e| e.to_string())
+                .and_then(|d| service::theme_save(&d, &s(name))),
+        )
+    }
     pub fn import_restore(&self) -> QString {
         json_or_err(with_lib(service::import_restore))
     }
@@ -391,4 +407,11 @@ fn run_task(
         }),
         other => Err(format!("unknown task '{other}'")),
     }
+}
+
+/// The saved colour theme, read before the interface starts (it decides the controls style).
+pub fn current_theme() -> String {
+    appofholding_core::Dirs::detect()
+        .map(|d| service::theme_load(&d))
+        .unwrap_or_else(|_| "system".into())
 }

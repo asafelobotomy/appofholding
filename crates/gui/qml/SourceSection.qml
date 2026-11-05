@@ -195,10 +195,9 @@ ColumnLayout {
                 enabled: link.text.length > 0 && !applicationWindow().working
                 onClicked: { sec.tested = null; sec.testError = ""; sec.backend.start("resolve", sec.appId, link.text, pattern.text, channel.keys[channel.currentIndex]) }
             }
-            QQC2.Button {
+            PrimaryButton {
                 text: qsTr("Save")
                 icon.name: "document-save"
-                highlighted: link.text.length > 0
                 enabled: link.text.length > 0
                 onClicked: {
                     var err = sec.backend.setSource(sec.appId, link.text, pattern.text, channel.keys[channel.currentIndex])

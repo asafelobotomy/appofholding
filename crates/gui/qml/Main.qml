@@ -23,6 +23,19 @@ Kirigami.ApplicationWindow {
     property var selfInfo: null
     readonly property bool working: backend.tasks > 0
     readonly property alias backendObject: backend
+    // The chosen colour theme ("system" follows the desktop); changing it takes effect after a restart.
+    property string themeName: backend.theme()
+    // Colours for our own theme as seen by Kirigami (the style's controls use the application palette).
+    readonly property var themePalette: Themes.palette(themeName)
+    palette.window: themePalette ? themePalette.bg : Kirigami.Theme.backgroundColor
+    palette.windowText: themePalette ? themePalette.text : Kirigami.Theme.textColor
+    palette.base: themePalette ? themePalette.bg : Kirigami.Theme.backgroundColor
+    palette.text: themePalette ? themePalette.text : Kirigami.Theme.textColor
+    palette.button: themePalette ? themePalette.bgAlt : Kirigami.Theme.backgroundColor
+    palette.buttonText: themePalette ? themePalette.text : Kirigami.Theme.textColor
+    palette.highlight: themePalette ? themePalette.accent : Kirigami.Theme.highlightColor
+    palette.highlightedText: themePalette ? themePalette.accentText : Kirigami.Theme.highlightedTextColor
+    palette.placeholderText: themePalette ? themePalette.dim : Kirigami.Theme.disabledTextColor
 
     Backend { id: backend }
 
@@ -119,6 +132,30 @@ Kirigami.ApplicationWindow {
     }
 
     globalDrawer: Kirigami.GlobalDrawer {
+        Kirigami.Theme.inherit: root.themePalette === null
+        palette.window: root.themePalette ? root.themePalette.bg : Kirigami.Theme.backgroundColor
+        palette.windowText: root.themePalette ? root.themePalette.text : Kirigami.Theme.textColor
+        palette.base: root.themePalette ? root.themePalette.bg : Kirigami.Theme.backgroundColor
+        palette.text: root.themePalette ? root.themePalette.text : Kirigami.Theme.textColor
+        palette.button: root.themePalette ? root.themePalette.bgAlt : Kirigami.Theme.backgroundColor
+        palette.buttonText: root.themePalette ? root.themePalette.text : Kirigami.Theme.textColor
+        palette.highlight: root.themePalette ? root.themePalette.accent : Kirigami.Theme.highlightColor
+        palette.highlightedText: root.themePalette ? root.themePalette.accentText : Kirigami.Theme.highlightedTextColor
+        palette.placeholderText: root.themePalette ? root.themePalette.dim : Kirigami.Theme.disabledTextColor
+        Kirigami.Theme.backgroundColor: root.themePalette ? root.themePalette.bg : "transparent"
+        Kirigami.Theme.alternateBackgroundColor: root.themePalette ? root.themePalette.bgAlt : "transparent"
+        Kirigami.Theme.textColor: root.themePalette ? root.themePalette.text : "transparent"
+        Kirigami.Theme.disabledTextColor: root.themePalette ? root.themePalette.dim : "transparent"
+        Kirigami.Theme.highlightColor: root.themePalette ? root.themePalette.accent : "transparent"
+        Kirigami.Theme.highlightedTextColor: root.themePalette ? root.themePalette.accentText : "transparent"
+        Kirigami.Theme.activeBackgroundColor: root.themePalette ? root.themePalette.bgActive : "transparent"
+        Kirigami.Theme.hoverColor: root.themePalette ? root.themePalette.accent : "transparent"
+        Kirigami.Theme.focusColor: root.themePalette ? root.themePalette.accent : "transparent"
+        Kirigami.Theme.linkColor: root.themePalette ? root.themePalette.link : "transparent"
+        Kirigami.Theme.visitedLinkColor: root.themePalette ? root.themePalette.visited : "transparent"
+        Kirigami.Theme.positiveTextColor: root.themePalette ? root.themePalette.positive : "transparent"
+        Kirigami.Theme.neutralTextColor: root.themePalette ? root.themePalette.neutral : "transparent"
+        Kirigami.Theme.negativeTextColor: root.themePalette ? root.themePalette.negative : "transparent"
         title: "appOFholding"
         titleIcon: "qrc:/appofholding/app-icon.svg"
         isMenu: false
