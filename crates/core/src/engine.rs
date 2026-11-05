@@ -535,12 +535,30 @@ impl Library {
 
     /// The background run: respects each app's policy, never aborts on one app's failure, and
     /// tells the user about news once.
-    pub fn run_scheduled(&self, http: &dyn Http, notifier: &dyn Notifier) -> Result<Vec<Outcome>> {
+    pub fn run_scheduled(
+        &self,
+        http: &(dyn Http + Sync),
+        notifier: &dyn Notifier,
+    ) -> Result<Vec<Outcome>> {
         let mut out = Vec::new();
-        for rec in self.db.list_sources()? {
+        let records = self.db.list_sources()?;
+        // Apps that only need a look at the server are checked a few at a time; automatic
+        // updates download and install, so those run one after another below.
+        let ask: Vec<String> = records
+            .iter()
+            .filter(|r| !matches!(r.policy, Policy::Pinned | Policy::Auto))
+            .map(|r| r.app_id.clone())
+            .collect();
+        let mut checked: std::collections::HashMap<String, Result<CheckState>> = ask
+            .iter()
+            .cloned()
+            .zip(self.par_map(&ask, |lib, id| lib.check_impl(http, id, true)))
+            .collect();
+        for rec in records {
             let id = rec.app_id.clone();
             let name = self.get(&id).map(|a| a.name).unwrap_or_else(|_| id.clone());
-            out.push(match self.scheduled_one(http, notifier, &rec, &name) {
+            let pre = checked.remove(&id);
+            out.push(match self.scheduled_one(http, notifier, &rec, &name, pre) {
                 Ok(o) => o,
                 Err(e) => {
                     notifier.notify(&format!("{name}: update check failed"), &e.to_string());
@@ -560,6 +578,7 @@ impl Library {
         notifier: &dyn Notifier,
         rec: &SourceRecord,
         name: &str,
+        pre: Option<Result<CheckState>>,
     ) -> Result<Outcome> {
         let id = rec.app_id.clone();
         if rec.policy == Policy::Pinned {
@@ -586,7 +605,10 @@ impl Library {
                 Applied::Deferred { version, .. } => Outcome::Deferred { id, version },
             });
         }
-        let state = self.check_impl(http, &id, true)?;
+        let state = match pre {
+            Some(r) => r?,
+            None => self.check_impl(http, &id, true)?,
+        };
         if state.status != Status::UpdateAvailable {
             return Ok(Outcome::UpToDate { id });
         }

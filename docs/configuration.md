@@ -53,3 +53,11 @@ depends on how you installed it:
 | `make install PREFIX=~/.local` or unknown | changes nothing and tells you where to get the release |
 
 The package manager's own files are never overwritten by appOFholding.
+
+## Interface settings
+
+The only setting the graphical app keeps for itself is the colour theme: the file
+`gui-theme` in the appOFholding config folder (`~/.config/appofholding/gui-theme`) holds
+`system`, `gruvbox-dark` or `gruvbox-light`. Change it under Settings > Appearance; it applies the
+next time the app starts. Deleting the file goes back to following the desktop. It is not part of
+`export` / `apply`, because it belongs to the machine rather than to the library.

@@ -54,13 +54,23 @@ impl Library {
         http: &(dyn Http + Sync),
         ids: &[String],
     ) -> Vec<(String, Result<Report>)> {
+        let results = self.par_map(ids, |lib, id| lib.check(http, id));
+        ids.iter().cloned().zip(results).collect()
+    }
+
+    /// Run `work` for every id, a few at a time, each worker on its own database connection.
+    /// Results are in the order of `ids`.
+    pub(crate) fn par_map<R: Send>(
+        &self,
+        ids: &[String],
+        work: impl Fn(&Library, &str) -> Result<R> + Sync,
+    ) -> Vec<Result<R>> {
         use std::sync::Mutex;
         use std::sync::atomic::{AtomicUsize, Ordering};
         const WORKERS: usize = 4;
         let (dirs, exec_bin) = (self.dirs.clone(), self.exec_bin.clone());
         let next = AtomicUsize::new(0);
-        let out: Mutex<Vec<Option<Result<Report>>>> =
-            Mutex::new((0..ids.len()).map(|_| None).collect());
+        let out: Mutex<Vec<Option<Result<R>>>> = Mutex::new((0..ids.len()).map(|_| None).collect());
         std::thread::scope(|scope| {
             for _ in 0..WORKERS.min(ids.len()) {
                 scope.spawn(|| {
@@ -69,7 +79,7 @@ impl Library {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         let Some(id) = ids.get(i) else { break };
                         let r = match &lib {
-                            Ok(l) => l.check(http, id),
+                            Ok(l) => work(l, id),
                             Err(e) => Err(Error::Other(e.to_string())),
                         };
                         out.lock().unwrap()[i] = Some(r);
@@ -77,14 +87,10 @@ impl Library {
                 });
             }
         });
-        let results = out.into_inner().unwrap();
-        ids.iter()
-            .cloned()
-            .zip(
-                results
-                    .into_iter()
-                    .map(|r| r.unwrap_or_else(|| Err(Error::Other("check did not run".into())))),
-            )
+        out.into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|r| r.unwrap_or_else(|| Err(Error::Other("check did not run".into()))))
             .collect()
     }
 
