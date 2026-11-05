@@ -399,6 +399,67 @@ pub fn install_link(
     Ok(json!({"id": rec.id, "name": rec.name}))
 }
 
+fn self_json(s: &appofholding_core::selfupdate::SelfStatus) -> Value {
+    use appofholding_core::selfupdate::InstallKind;
+    json!({
+        "current": s.current,
+        "latest": s.latest,
+        "available": s.update_available,
+        "install": s.install.label(),
+        "url": s.release_url,
+        "fromCache": s.from_cache,
+        // What to tell the user when the update cannot be done from inside the window.
+        "command": match s.install {
+            InstallKind::Pacman { .. } => "appofholding self update --install",
+            _ => "",
+        },
+    })
+}
+
+/// Is there a newer appOFholding release? Answers from a cache unless `force`.
+pub fn self_check(
+    http: &dyn appofholding_core::http::Http,
+    install: appofholding_core::selfupdate::InstallKind,
+    force: bool,
+) -> Res<Value> {
+    let dirs = Dirs::detect().map_err(e)?;
+    let s = appofholding_core::selfupdate::check_cached(
+        http,
+        &dirs,
+        install,
+        appofholding_core::assets::Arch::host(),
+        force,
+    )
+    .map_err(e)?;
+    Ok(self_json(&s))
+}
+
+/// Update appOFholding itself where it can be done without a password prompt (AppImage
+/// installs); other installs get the command to run.
+pub fn self_update(
+    http: &dyn appofholding_core::http::Http,
+    install: appofholding_core::selfupdate::InstallKind,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Res<Value> {
+    use appofholding_core::selfupdate::{self, Applied};
+    let dirs = Dirs::detect().map_err(e)?;
+    let status =
+        selfupdate::check(http, install, appofholding_core::assets::Arch::host()).map_err(e)?;
+    let work = dirs.cache_home.join("appofholding/self");
+    Ok(
+        match selfupdate::apply(http, &status, &work, progress).map_err(e)? {
+            Applied::AlreadyCurrent => json!({"result": "current"}),
+            Applied::Replaced { to, .. } => json!({"result": "replaced", "to": to}),
+            Applied::PackageReady { to, command, .. } => {
+                json!({"result": "package", "to": to, "command": command.join(" ")})
+            }
+            Applied::Manual { to, instructions } => {
+                json!({"result": "manual", "to": to, "instructions": instructions})
+            }
+        },
+    )
+}
+
 pub fn add_file(lib: &Library, path: &str) -> Res<Value> {
     let path = path.strip_prefix("file://").unwrap_or(path);
     let rec = lib
@@ -722,6 +783,62 @@ mod tests {
         std::fs::write(f.path(), b).unwrap();
         let _ = Stdio::null();
         appofholding_core::image::hash_file(f.path()).unwrap().0
+    }
+
+    #[test]
+    fn self_update_json_for_the_banner() {
+        use appofholding_core::selfupdate::InstallKind;
+        let api = "https://api.github.com/repos/asafelobotomy/appofholding/releases/latest";
+        let http = FakeHttp::default().json(
+            api,
+            r#"{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[]}"#,
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        // SAFETY: only this test in this binary sets the variable.
+        unsafe { std::env::set_var("APPOFHOLDING_ROOT", tmp.path()) };
+        let v = self_check(
+            &http,
+            InstallKind::Pacman {
+                package: "appofholding".into(),
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                v["available"].clone(),
+                v["latest"].clone(),
+                v["install"].clone()
+            ),
+            (json!(true), json!("99.0.0"), json!("pacman"))
+        );
+        assert_eq!(v["command"], "appofholding self update --install");
+        assert!(
+            v["url"]
+                .as_str()
+                .unwrap()
+                .ends_with("/releases/tag/v99.0.0")
+        );
+        // The second answer comes from the cache and still says an update exists.
+        let again = self_check(&http, InstallKind::AppImage { path: "/x".into() }, false).unwrap();
+        assert_eq!(
+            (
+                again["fromCache"].clone(),
+                again["available"].clone(),
+                again["command"].clone()
+            ),
+            (json!(true), json!(true), json!(""))
+        );
+        // A package install gets guidance, not a half-finished update.
+        let r = self_update(&http, InstallKind::Unknown, &mut |_, _| {}).unwrap();
+        assert_eq!(r["result"], "manual");
+        assert!(
+            r["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("releases/tag/v99.0.0")
+        );
+        unsafe { std::env::remove_var("APPOFHOLDING_ROOT") };
     }
 
     #[test]

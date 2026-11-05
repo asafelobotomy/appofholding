@@ -19,6 +19,8 @@ Kirigami.ApplicationWindow {
     // Bumped whenever the library changed, so open pages reload themselves.
     property int revision: 0
     property var progress: ({})
+    // Result of the latest check for a new appOFholding release ({available, latest, install, ...}).
+    property var selfInfo: null
     readonly property bool working: backend.tasks > 0
     readonly property alias backendObject: backend
 
@@ -45,6 +47,7 @@ Kirigami.ApplicationWindow {
         // Files handed to us by the desktop (double-click, "Open with", drag onto the icon).
         var files = Util.parse(backend.startupFiles())
         for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i], "", "")
+        backend.start("selfCheck", "", "", "", "")   // answered from a cache most of the time
     }
 
     Connections {
@@ -62,6 +65,21 @@ Kirigami.ApplicationWindow {
             root.progress = p
             var data = ok ? Util.parse(payload) : {error: payload}
             switch (kind) {
+            case "selfCheck":
+                if (ok) root.selfInfo = data
+                break
+            case "selfUpdate":
+                if (!ok) {
+                    root.showPassiveNotification(payload)
+                } else if (data.result === "replaced") {
+                    root.showPassiveNotification(qsTr("Updated to %1. Restart appOFholding to use it.").arg(data.to))
+                    root.selfInfo = null
+                } else if (data.result === "package") {
+                    root.showPassiveNotification(qsTr("Run in a terminal: appofholding self update --install"))
+                } else {
+                    root.showPassiveNotification(data.instructions || qsTr("Nothing to update"))
+                }
+                break
             case "checkAll":
                 root.reload()
                 if (ok) {

@@ -30,6 +30,36 @@ Kirigami.ScrollablePage {
         }
     ]
 
+    header: Kirigami.InlineMessage {
+        id: selfMessage
+        readonly property var info: applicationWindow().selfInfo
+        width: parent ? parent.width : implicitWidth
+        visible: !!info && info.available
+        type: Kirigami.MessageType.Information
+        text: info ? qsTr("appOFholding %1 is available (you have %2).").arg(info.latest).arg(info.current) : ""
+        actions: [
+            Kirigami.Action {
+                text: qsTr("What's new")
+                icon.name: "help-about"
+                onTriggered: Qt.openUrlExternally(selfMessage.info.url)
+            },
+            Kirigami.Action {
+                text: selfMessage.info && selfMessage.info.install === "appimage" ? qsTr("Update now") : qsTr("How to update")
+                icon.name: "update-none"
+                onTriggered: {
+                    var i = selfMessage.info
+                    if (i.install === "appimage") {
+                        applicationWindow().backendObject.start("selfUpdate", "", "", "", "")
+                    } else if (i.command) {
+                        applicationWindow().showPassiveNotification(qsTr("Run in a terminal: %1").arg(i.command))
+                    } else {
+                        Qt.openUrlExternally(i.url)
+                    }
+                }
+            }
+        ]
+    }
+
     Kirigami.CardsListView {
         id: list
         model: applicationWindow().apps

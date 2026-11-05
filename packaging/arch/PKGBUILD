@@ -6,7 +6,7 @@
 #     source=("$pkgname-$pkgver.tar.gz::<release URL>")  and  cd "$pkgname-$pkgver"  in each function.
 
 pkgname=appofholding
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='AppImage manager: menu integration, updates, launch options and sandboxing'
 arch=(x86_64 aarch64)

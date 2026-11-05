@@ -57,6 +57,20 @@ Kirigami.ScrollablePage {
                 Layout.fillWidth: true
             }
             QQC2.Label { text: qsTr("Licensed under the GPL, version 3 or later."); opacity: 0.7 }
+            RowLayout {
+                QQC2.Label {
+                    readonly property var info: applicationWindow().selfInfo
+                    text: !info ? qsTr("Version: checking…")
+                        : info.available ? qsTr("Version %1 — %2 is available").arg(info.current).arg(info.latest)
+                        : qsTr("Version %1 — up to date").arg(info.current)
+                }
+                QQC2.Button {
+                    text: qsTr("Check now")
+                    icon.name: "view-refresh"
+                    enabled: !applicationWindow().working
+                    onClicked: page.backend.start("selfCheck", "", "force", "", "")
+                }
+            }
         }
     }
 }

@@ -39,3 +39,17 @@ post-update = "notify-send updated"
 ```
 
 Unknown keys are errors, so a typo never silently does nothing.
+
+## Updating appOFholding itself
+
+`appofholding self check` compares the running version with the newest GitHub release, and the
+background timer announces a new release once per version. What `appofholding self update` does
+depends on how you installed it:
+
+| Install | What happens |
+|---|---|
+| pacman package | downloads the release's `.pkg.tar.zst`, verifies its SHA-256, and shows `run0 pacman -U <file>`; add `--install` to run it |
+| AppImage | downloads and verifies the new AppImage and replaces the running file, keeping `*.AppImage.previous` |
+| `make install PREFIX=~/.local` or unknown | changes nothing and tells you where to get the release |
+
+The package manager's own files are never overwritten by appOFholding.

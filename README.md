@@ -52,6 +52,9 @@ appofholding launch set foo --preset electron-auto       # launch options
 appofholding sandbox set foo --level standard            # sandbox it
 appofholding run --print foo                             # see exactly what will run
 
+appofholding self check                                  # is there a newer appOFholding?
+appofholding self update                                 # update it (see docs for how each install type works)
+
 appofholding export -o setup.toml                        # save your setup
 appofholding apply setup.toml                            # recreate it elsewhere
 ```

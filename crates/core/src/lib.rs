@@ -25,6 +25,7 @@ pub mod providers;
 pub mod running;
 pub mod sandbox;
 pub mod schedule;
+pub mod selfupdate;
 pub mod source;
 pub mod updates;
 pub mod version;

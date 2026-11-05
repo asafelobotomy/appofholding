@@ -1,19 +1,80 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5b8def"/>
-      <stop offset="1" stop-color="#2b4fb8"/>
+      <stop offset="0" stop-color="#2a1f63"/>
+      <stop offset="1" stop-color="#120d33"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f3e8ff" stop-opacity="1"/>
+      <stop offset="0.35" stop-color="#b794f6" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="leather" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b9793a"/>
+      <stop offset="0.55" stop-color="#8a5526"/>
+      <stop offset="1" stop-color="#4f2d12"/>
+    </linearGradient>
+    <linearGradient id="rope" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0d9a0"/>
+      <stop offset="1" stop-color="#b98f4a"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe9a3"/>
+      <stop offset="1" stop-color="#d49a2a"/>
     </linearGradient>
   </defs>
+
   <rect width="128" height="128" rx="28" fill="url(#bg)"/>
-  <!-- a cinched pouch that holds an app window -->
-  <path d="M47 58 C26 72 24 100 34 108 Q64 119 94 108 C104 100 102 72 81 58 Z" fill="#ffffff" opacity="0.96"/>
-  <rect x="43" y="51" width="42" height="10" rx="5" fill="#cfdcff"/>
-  <path d="M56 51 C50 38 44 36 40 40 C44 46 50 50 56 51 Z" fill="#cfdcff"/>
-  <path d="M72 51 C78 38 84 36 88 40 C84 46 78 50 72 51 Z" fill="#cfdcff"/>
-  <rect x="48" y="73" width="32" height="24" rx="4" fill="#2b4fb8"/>
-  <rect x="48" y="73" width="32" height="7" rx="3.5" fill="#7aa2ff"/>
-  <circle cx="53.5" cy="76.5" r="1.5" fill="#ffffff"/>
-  <circle cx="59" cy="76.5" r="1.5" fill="#ffffff"/>
-  <circle cx="64.5" cy="76.5" r="1.5" fill="#ffffff"/>
+  <!-- distant stars -->
+  <g fill="#ffffff">
+    <circle cx="16" cy="22" r="1.1" opacity="0.7"/><circle cx="110" cy="16" r="1.3" opacity="0.8"/>
+    <circle cx="104" cy="44" r="0.9" opacity="0.6"/><circle cx="22" cy="52" r="0.9" opacity="0.5"/>
+    <circle cx="116" cy="70" r="1" opacity="0.5"/><circle cx="12" cy="84" r="1.1" opacity="0.6"/>
+  </g>
+
+  <!-- the magic spilling out of the bag -->
+  <circle cx="64" cy="48" r="38" fill="url(#glow)"/>
+
+  <!-- things the bag is holding: a scroll and a sword hilt -->
+  <g transform="rotate(14 86 52)">
+    <rect x="81" y="26" width="9" height="30" rx="4" fill="#f3e6c4" stroke="#b79a5b" stroke-width="1"/>
+    <rect x="79.5" y="24" width="12" height="4.5" rx="2.2" fill="#d4b873"/>
+    <rect x="79.5" y="52.5" width="12" height="4.5" rx="2.2" fill="#d4b873"/>
+    <path d="M83 33h5M83 37h5M83 41h4" stroke="#b79a5b" stroke-width="0.9" stroke-linecap="round"/>
+  </g>
+  <g transform="rotate(-12 50 50)">
+    <rect x="47.2" y="30" width="5.6" height="24" rx="1.5" fill="#6b4423"/>
+    <rect x="39" y="26" width="22" height="5" rx="2.5" fill="url(#gold)"/>
+    <circle cx="50" cy="23.5" r="3.4" fill="url(#gold)"/>
+    <path d="M47.2 36h5.6M47.2 40h5.6M47.2 44h5.6" stroke="#3b2210" stroke-width="0.8"/>
+  </g>
+
+  <!-- sparkles -->
+  <g fill="#ffffff">
+    <path d="M64 6 L66 14 L74 16 L66 18 L64 26 L62 18 L54 16 L62 14 Z" opacity="0.95"/>
+    <path d="M100 30 L101.3 35 L106 36.5 L101.3 38 L100 43 L98.7 38 L94 36.5 L98.7 35 Z" opacity="0.9"/>
+    <path d="M28 34 L29 38 L33 39 L29 40 L28 44 L27 40 L23 39 L27 38 Z" opacity="0.85"/>
+  </g>
+
+  <!-- the bag -->
+  <path d="M42 70 C22 78 15 106 29 115 Q64 128 99 115 C113 106 106 78 86 70 Z" fill="url(#leather)"/>
+  <path d="M33 86 C28 96 29 106 36 112" fill="none" stroke="#e0a867" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+  <!-- seam with stitches -->
+  <path d="M64 76 C59 90 59 102 64 116" fill="none" stroke="#2c1708" stroke-width="1.6" stroke-dasharray="3 2.4" stroke-linecap="round" opacity="0.8"/>
+  <!-- gold rune patch -->
+  <circle cx="76" cy="97" r="8.5" fill="url(#gold)" stroke="#6b4a12" stroke-width="1.2"/>
+  <path d="M76 91.5 L80.2 97 L76 102.5 L71.8 97 Z" fill="none" stroke="#6b4a12" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M76 94.5v5" stroke="#6b4a12" stroke-width="1.4" stroke-linecap="round"/>
+
+  <!-- gathered neck, mouth and drawstring -->
+  <path d="M40 72 Q64 58 88 72 L84 78 Q64 70 44 78 Z" fill="#5e3517"/>
+  <ellipse cx="64" cy="64" rx="22" ry="6" fill="#241006"/>
+  <path d="M42 66 Q64 78 86 66" fill="none" stroke="#7a4a1f" stroke-width="3" stroke-linecap="round"/>
+  <rect x="42" y="68.5" width="44" height="8" rx="4" fill="url(#rope)" stroke="#8c6a2e" stroke-width="0.8"/>
+  <path d="M50 70l3 6M58 70l3 6M66 70l3 6M74 70l3 6" stroke="#b98f4a" stroke-width="1" stroke-linecap="round" opacity="0.8"/>
+  <!-- knot and dangling cords with tassels -->
+  <circle cx="64" cy="77.5" r="4" fill="url(#rope)" stroke="#8c6a2e" stroke-width="0.8"/>
+  <path d="M61.5 80 C57 86 55 90 56 95" fill="none" stroke="#e9cf94" stroke-width="2" stroke-linecap="round"/>
+  <path d="M66.5 80 C71 85 72 88 71 92" fill="none" stroke="#e9cf94" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="56" cy="96.5" r="2.4" fill="url(#gold)" stroke="#6b4a12" stroke-width="0.6"/>
 </svg>

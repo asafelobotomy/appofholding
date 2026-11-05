@@ -14,6 +14,7 @@ use appofholding_core::notify::NotifySend;
 use appofholding_core::profiles::{self, LaunchCtx};
 use appofholding_core::sandbox::{self, Bus, HomeAccess, Level, PathGrant};
 use appofholding_core::schedule::{self, Interval};
+use appofholding_core::selfupdate;
 use appofholding_core::source::Policy;
 use appofholding_core::source::{self, Channel, Source};
 use appofholding_core::version::{Installed, Status};
@@ -107,6 +108,9 @@ enum Cmd {
     /// Install or remove the systemd timer that checks for updates in the background.
     #[command(subcommand)]
     Schedule(ScheduleCmd),
+    /// Check for a new release of appOFholding itself, and update it where that is possible.
+    #[command(subcommand, name = "self")]
+    SelfUpdate(SelfCmd),
     /// Write everything you have set up (sources, policies, launch profiles, sandboxes, hooks)
     /// to a portable TOML file.
     Export {
@@ -201,6 +205,108 @@ enum SandboxCmd {
     Gc,
     /// Check that this machine can run sandboxes (bubblewrap, user namespaces, D-Bus proxy).
     Check,
+}
+
+#[derive(Subcommand)]
+enum SelfCmd {
+    /// Is there a newer release?
+    Check {
+        /// Ask GitHub even if a recent answer is cached.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Update appOFholding. Package installs download a verified package and show (or, with
+    /// --install, run) the command; AppImage installs replace themselves; others get instructions.
+    Update {
+        /// For package installs: run `run0 pacman -U` on the downloaded package.
+        #[arg(long)]
+        install: bool,
+    },
+}
+
+fn self_cmd(cmd: SelfCmd) -> Result<()> {
+    let dirs = dirs()?;
+    let http = UreqHttp::new();
+    let install = selfupdate::detect_current();
+    let arch = Arch::host();
+    let how = match &install {
+        selfupdate::InstallKind::Pacman { package } => {
+            format!("installed with pacman (package {package})")
+        }
+        selfupdate::InstallKind::AppImage { path } => {
+            format!("running from the AppImage {}", path.display())
+        }
+        selfupdate::InstallKind::UserLocal { path } => {
+            format!("installed under your home folder ({})", path.display())
+        }
+        selfupdate::InstallKind::Unknown => "installation method unknown".to_string(),
+    };
+    match cmd {
+        SelfCmd::Check { force } => {
+            let s = selfupdate::check_cached(&http, &dirs, install, arch, force)?;
+            println!("appOFholding {}  ({how})", s.current);
+            if s.update_available {
+                println!(
+                    "A newer release is available: {}{}",
+                    s.latest,
+                    if s.from_cache { "  (cached)" } else { "" }
+                );
+                println!("  {}", s.release_url);
+                println!(
+                    "Update with: appofholding self update{}",
+                    if matches!(s.install, selfupdate::InstallKind::Pacman { .. }) {
+                        " --install"
+                    } else {
+                        ""
+                    }
+                );
+            } else {
+                println!("Up to date (latest release: {}).", s.latest);
+            }
+        }
+        SelfCmd::Update {
+            install: run_install,
+        } => {
+            let status = selfupdate::check(&http, install, arch)?;
+            let work = dirs.cache_home.join("appofholding/self");
+            match selfupdate::apply(&http, &status, &work, &mut progress())? {
+                selfupdate::Applied::AlreadyCurrent => {
+                    println!("appOFholding {} is the newest release.", status.current)
+                }
+                selfupdate::Applied::Replaced { to, path, backup } => {
+                    println!("Updated to {to}: {}", path.display());
+                    println!(
+                        "The previous version is kept at {} (delete it when you are happy).",
+                        backup.display()
+                    );
+                }
+                selfupdate::Applied::PackageReady { to, file, command } => {
+                    println!(
+                        "Downloaded and verified appOFholding {to}: {}",
+                        file.display()
+                    );
+                    let line = command.join(" ");
+                    if run_install {
+                        println!("Running: {line}");
+                        let ok = Command::new(&command[0])
+                            .args(&command[1..])
+                            .status()
+                            .is_ok_and(|s| s.success());
+                        if !ok {
+                            bail!("the package manager did not finish; you can retry with: {line}");
+                        }
+                        println!("Installed {to}. Restart any open appOFholding windows.");
+                    } else {
+                        println!("Install it with:\n  {line}\n(or re-run with --install)");
+                    }
+                }
+                selfupdate::Applied::Manual { to, instructions } => {
+                    println!("Version {to} is available.\n{instructions}")
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -1149,6 +1255,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Sandbox(cmd) => sandbox_cmd(cmd)?,
+        Cmd::SelfUpdate(cmd) => self_cmd(cmd)?,
         Cmd::Export { output } => {
             let text = library()?.export_config()?.to_toml()?;
             match output {
@@ -1264,6 +1371,18 @@ fn main() -> Result<()> {
             if scheduled {
                 for o in lib.run_scheduled(&http, &NotifySend)? {
                     println!("{}", describe_outcome(&o));
+                }
+                // The program itself: tell the user once when a new release is out.
+                match selfupdate::notify_if_new(
+                    &http,
+                    &NotifySend,
+                    &lib.dirs,
+                    selfupdate::detect_current(),
+                    Arch::host(),
+                ) {
+                    Ok(Some(msg)) => println!("appofholding: {msg}"),
+                    Ok(None) => {}
+                    Err(e) => println!("appofholding: could not check for a new release: {e}"),
                 }
                 return Ok(());
             }

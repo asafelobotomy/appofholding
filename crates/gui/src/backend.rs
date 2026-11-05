@@ -92,7 +92,7 @@ pub mod qobject {
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: checkAll | check | update | resolve | install | addFile | prepare
+        // kind: checkAll | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -351,6 +351,17 @@ fn run_task(
         "resolve" => service::resolve_link(a, b, c),
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),
         "addFile" => with_lib(|l| service::add_file(l, a)),
+        // a = "force" to skip the cache
+        "selfCheck" => service::self_check(
+            &http,
+            appofholding_core::selfupdate::detect_current(),
+            a == "force",
+        ),
+        "selfUpdate" => service::self_update(
+            &http,
+            appofholding_core::selfupdate::detect_current(),
+            progress,
+        ),
         "prepare" => with_lib(|l| {
             l.prepare_launch(id)
                 .map(|()| json!({"ok": true}))

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- Self-updater: `appofholding self check` / `self update` look at this project's GitHub releases.
+  Package installs download and verify the new package and show the `run0 pacman -U` command
+  (or run it with `--install`); AppImage installs replace themselves and keep the previous file;
+  other installs get instructions. The background timer announces a new release once, and the
+  GUI shows a banner.
+- New icon: a Bag of Holding.
+- Fix: cached (HTTP 304) update checks failed against GitHub because an empty "not modified"
+  reply was treated as gzip data.
+- `scripts/smoke.sh`: an end-to-end test for a real desktop session.
+
 ## 0.1.0
 
 First release.
