@@ -332,6 +332,63 @@ pub fn looks_like_chromium(appdir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// `--ro-bind /usr` plus `/bin`, `/sbin`, `/lib`, `/lib64`: on merged-/usr systems these are
+/// links into `/usr`, recreated with their real target (Arch: `lib64 -> usr/lib`; Fedora, Debian
+/// and Ubuntu: `lib64 -> usr/lib64`); elsewhere they are bound read-only.
+pub fn base_system_args(exists: &dyn Fn(&Path) -> bool) -> Vec<String> {
+    let mut a: Vec<String> = ["--ro-bind", "/usr", "/usr"].map(String::from).to_vec();
+    for d in ["bin", "sbin", "lib", "lib64"] {
+        let p = PathBuf::from("/").join(d);
+        if !exists(&p) {
+            continue;
+        }
+        match std::fs::read_link(&p) {
+            Ok(target) => a.extend([
+                "--symlink".into(),
+                target.to_string_lossy().into_owned(),
+                format!("/{d}"),
+            ]),
+            Err(_) => a.extend(["--ro-bind".into(), format!("/{d}"), format!("/{d}")]),
+        }
+    }
+    a
+}
+
+/// The smallest sandbox that runs `/bin/true`: answers "can bubblewrap work here at all?".
+pub fn probe_args() -> Vec<String> {
+    let mut a = vec!["--unshare-all".to_string()];
+    a.extend(base_system_args(&|p: &Path| p.exists()));
+    a.extend(["--proc", "/proc", "--dev", "/dev", "/bin/true"].map(String::from));
+    a
+}
+
+/// Bus name prefixes that belong to the desktop and its services. An app may not claim names
+/// under them, whatever its own `.desktop` files say.
+const RESERVED_BUS_PREFIXES: &[&str] = &[
+    "org.freedesktop.",
+    "org.gnome.",
+    "org.gtk.",
+    "org.kde.kwalletd",
+    "org.kde.KWin",
+    "org.kde.plasmashell",
+    "org.kde.StatusNotifier",
+    "org.kde.kglobalaccel",
+    "org.kde.ksmserver",
+    "org.a11y.",
+    "com.canonical.",
+    "ca.desrt.",
+];
+
+/// A name the app may own: a valid bus name with at least three parts (so `org.kde` or
+/// `com.example` can never become a wildcard over a whole vendor) outside the desktop's names.
+fn ownable_bus_name(n: &str) -> bool {
+    valid_bus_name(n)
+        && n.split('.').count() >= 3
+        && !RESERVED_BUS_PREFIXES
+            .iter()
+            .any(|p| n.starts_with(p) || format!("{n}.").starts_with(p))
+}
+
 fn valid_bus_name(n: &str) -> bool {
     let parts: Vec<&str> = n.split('.').collect();
     parts.len() >= 2
@@ -371,7 +428,7 @@ pub fn dbus_names(appdir: &Path) -> Vec<String> {
             );
         }
         for c in cands {
-            if valid_bus_name(&c) && !names.contains(&c) && names.len() < 8 {
+            if ownable_bus_name(&c) && !names.contains(&c) && names.len() < 8 {
                 names.push(c);
             }
         }
@@ -459,23 +516,7 @@ pub fn build(settings: &Settings, host: &Host, launch: &Launch<'_>) -> Result<Sa
     }
 
     // --- base system, read-only
-    push(&mut a, &["--ro-bind", "/usr", "/usr"]);
-    for d in ["bin", "sbin", "lib", "lib64"] {
-        let p = PathBuf::from("/").join(d);
-        if ex(&p) {
-            // Merged-/usr systems link these into /usr; recreate the link rather than bind.
-            let merged = std::fs::read_link(&p).is_ok() || !ex(&p);
-            if merged {
-                a.extend([
-                    "--symlink".into(),
-                    format!("usr/{}", if d == "lib64" { "lib" } else { d }),
-                    format!("/{d}"),
-                ]);
-            } else {
-                a.extend(["--ro-bind".into(), format!("/{d}"), format!("/{d}")]);
-            }
-        }
-    }
+    a.extend(base_system_args(&ex));
     for e in ETC {
         let p = PathBuf::from("/etc").join(e);
         if ex(&p) {
@@ -770,6 +811,15 @@ pub fn build(settings: &Settings, host: &Host, launch: &Launch<'_>) -> Result<Sa
     env.insert("XDG_RUNTIME_DIR".into(), rt.clone());
     env.insert("APPDIR".into(), "/app".into());
     env.insert("APPIMAGE".into(), image_in);
+    // Lets the host find this instance (to defer updates, and to keep its unpacked tree).
+    env.insert(
+        crate::running::HOST_APPIMAGE_VAR.into(),
+        launch.appimage.display().to_string(),
+    );
+    env.insert(
+        crate::running::TREE_VAR.into(),
+        launch.appdir.display().to_string(),
+    );
     for (k, v) in &host.env {
         env.entry(k.clone()).or_insert_with(|| v.clone());
     }
@@ -1206,6 +1256,20 @@ mod tests {
     }
 
     #[test]
+    fn base_system_links_keep_their_real_target() {
+        let args = base_system_args(&|p: &Path| p.exists());
+        assert_eq!(&args[..3], ["--ro-bind", "/usr", "/usr"]);
+        for d in ["bin", "sbin", "lib", "lib64"] {
+            let p = PathBuf::from("/").join(d);
+            if let Ok(t) = std::fs::read_link(&p) {
+                let at = args.iter().position(|a| a == &format!("/{d}")).unwrap();
+                assert_eq!(args[at - 2], "--symlink");
+                assert_eq!(args[at - 1], t.to_string_lossy());
+            }
+        }
+    }
+
+    #[test]
     fn declared_application_ids_may_own_their_bus_name() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1232,6 +1296,18 @@ mod tests {
                 && !valid_bus_name("a..b")
                 && !valid_bus_name("org.1x")
         );
+        // An AppImage cannot use its own file names to claim a vendor or the desktop's services.
+        for bad in [
+            "org.freedesktop",
+            "org.kde",
+            "org.freedesktop.secrets",
+            "org.freedesktop.Notifications",
+            "org.kde.kwalletd6",
+            "org.gnome.keyring",
+        ] {
+            assert!(!ownable_bus_name(bad), "{bad} must not be ownable");
+        }
+        assert!(ownable_bus_name("org.kde.krita") && ownable_bus_name("io.github.me.emobie"));
 
         let env = BTreeMap::new();
         let mut l = launch(&env, &[]);
@@ -1310,26 +1386,7 @@ mod tests {
 
     fn bwrap_works() -> bool {
         Command::new("bwrap")
-            .args([
-                "--unshare-all",
-                "--ro-bind",
-                "/usr",
-                "/usr",
-                "--symlink",
-                "usr/bin",
-                "/bin",
-                "--symlink",
-                "usr/lib",
-                "/lib",
-                "--symlink",
-                "usr/lib",
-                "/lib64",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                "/bin/true",
-            ])
+            .args(probe_args())
             .output()
             .is_ok_and(|o| o.status.success())
     }

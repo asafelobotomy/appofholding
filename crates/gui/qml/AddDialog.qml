@@ -13,13 +13,18 @@ Kirigami.Dialog {
     property var resolved: null
     property string error
     property bool installing: false
+    property bool resolving: false
+    // What the shown preview was looked up with; installing always uses exactly this.
+    property string lookedUpLink
+    property string lookedUpPattern
     readonly property var backend: applicationWindow().backendObject
-    readonly property real downloading: applicationWindow().progress[""] !== undefined ? applicationWindow().progress[""] : -2
+    readonly property real downloading: applicationWindow().progress["@install"] !== undefined ? applicationWindow().progress["@install"] : -2
 
     function openDialog() {
         resolved = null
         error = ""
         installing = false
+        resolving = false
         link.text = ""
         pattern.text = ""
         open()
@@ -27,22 +32,36 @@ Kirigami.Dialog {
     }
 
     function resolve() {
+        if (resolving || installing || link.text.length === 0) return
         resolved = null
         error = ""
+        resolving = true
+        lookedUpLink = link.text
+        lookedUpPattern = pattern.text
         backend.start("resolve", "", link.text, pattern.text, "latest")
     }
 
     function install() {
+        if (installing || !resolved) return
         installing = true
         error = ""
-        backend.start("install", "", link.text, pattern.text, "latest")
+        backend.start("install", "", lookedUpLink, lookedUpPattern, "latest")
+    }
+
+    // Editing the link or pattern makes the preview out of date: look it up again.
+    function inputChanged() {
+        if (resolved && (link.text !== lookedUpLink || pattern.text !== lookedUpPattern)) resolved = null
     }
 
     Connections {
         target: dialog.backend
         function onFinished(kind, id, ok, payload) {
-            if (id !== "" || !dialog.visible) return
+            if (id !== "") return
+            if (kind === "resolve") dialog.resolving = false
+            if (kind === "install") dialog.installing = false
+            if (!dialog.visible) return
             if (kind === "resolve") {
+                dialog.resolving = false
                 dialog.resolved = ok ? Util.parse(payload) : null
                 dialog.error = ok ? "" : payload
             } else if (kind === "install") {
@@ -66,13 +85,16 @@ Kirigami.Dialog {
             placeholderText: qsTr("https://github.com/owner/repo")
             Layout.fillWidth: true
             enabled: !dialog.installing
-            onAccepted: if (text.length > 0) dialog.resolve()
+            onAccepted: dialog.resolve()
+            onTextChanged: dialog.inputChanged()
         }
         QQC2.TextField {
             id: pattern
             placeholderText: qsTr("File name pattern (only if several files match)")
             Layout.fillWidth: true
             enabled: !dialog.installing
+            onAccepted: dialog.resolve()
+            onTextChanged: dialog.inputChanged()
         }
 
         Kirigami.InlineMessage {
@@ -122,7 +144,7 @@ Kirigami.Dialog {
             QQC2.Button {
                 text: qsTr("Look up")
                 icon.name: "edit-find"
-                enabled: link.text.length > 0 && !dialog.installing && !applicationWindow().working
+                enabled: link.text.length > 0 && !dialog.installing && !dialog.resolving
                 onClicked: dialog.resolve()
             }
             PrimaryButton {

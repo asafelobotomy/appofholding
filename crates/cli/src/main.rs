@@ -135,6 +135,10 @@ enum Cmd {
         /// Only show what would be done.
         #[arg(long)]
         dry_run: bool,
+        /// Also set up hooks, command prefixes and run-as-root profiles from the file. Without
+        /// this, entries that contain them are refused. Read the file first.
+        #[arg(long)]
+        allow_commands: bool,
     },
     /// Print a shell completion script (bash, zsh, fish, elvish, powershell).
     Completions { shell: clap_complete::Shell },
@@ -861,26 +865,7 @@ fn sandbox_cmd(cmd: SandboxCmd) -> Result<()> {
             );
             let works = bwrap
                 && Command::new("bwrap")
-                    .args([
-                        "--unshare-all",
-                        "--ro-bind",
-                        "/usr",
-                        "/usr",
-                        "--symlink",
-                        "usr/bin",
-                        "/bin",
-                        "--symlink",
-                        "usr/lib",
-                        "/lib",
-                        "--symlink",
-                        "usr/lib",
-                        "/lib64",
-                        "--proc",
-                        "/proc",
-                        "--dev",
-                        "/dev",
-                        "/bin/true",
-                    ])
+                    .args(appofholding_core::sandbox::probe_args())
                     .output()
                     .is_ok_and(|o| o.status.success());
             println!(
@@ -1301,6 +1286,7 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
                 bail!("interval must be hourly, daily or weekly")
             };
             let exe = std::env::current_exe().context("cannot determine own path")?;
+            let exe = appofholding_core::paths::stable_exec_path(exe);
             let (svc, timer) = schedule::write_units(&dirs, &exe, iv)?;
             println!("Wrote {}\n      {}", svc.display(), timer.display());
             if dirs.refresh_caches {
@@ -1463,7 +1449,10 @@ fn dirs() -> Result<Dirs> {
 
 fn library() -> Result<Library> {
     let exe = std::env::current_exe().context("cannot determine own path")?;
-    Ok(Library::open(dirs()?, exe)?)
+    Ok(Library::open(
+        dirs()?,
+        appofholding_core::paths::stable_exec_path(exe),
+    )?)
 }
 
 fn main() -> Result<()> {
@@ -1614,6 +1603,7 @@ fn main() -> Result<()> {
             no_install,
             prune,
             dry_run,
+            allow_commands,
         } => {
             let text = std::fs::read_to_string(&file)
                 .with_context(|| format!("cannot read {}", file.display()))?;
@@ -1631,11 +1621,30 @@ fn main() -> Result<()> {
                         "SKIP (not installed, nothing says how to get it)"
                     };
                     println!("{:<24} {what}", a.id);
+                    for c in appofholding_core::config::commands_in(a) {
+                        println!(
+                            "{:<24}   runs a command: {c}{}",
+                            "",
+                            if allow_commands {
+                                ""
+                            } else {
+                                "  (refused without --allow-commands)"
+                            }
+                        );
+                    }
                 }
                 return Ok(());
             }
             let mut failed = false;
-            for n in lib.apply_config(&UreqHttp::new(), &cfg, &ConfigApply { no_install, prune }) {
+            for n in lib.apply_config(
+                &UreqHttp::new(),
+                &cfg,
+                &ConfigApply {
+                    no_install,
+                    prune,
+                    allow_commands,
+                },
+            ) {
                 match n {
                     Note::Installed(id) => println!("{id}: downloaded and installed"),
                     Note::Added(id) => println!("{id}: added from file"),

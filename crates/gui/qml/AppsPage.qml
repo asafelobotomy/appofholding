@@ -95,8 +95,11 @@ ThemedPage {
                     onTriggered: Qt.openUrlExternally(selfMessage.info.url)
                 },
                 Kirigami.Action {
-                    text: selfMessage.info && selfMessage.info.install === "appimage" ? qsTr("Update now") : qsTr("How to update")
+                    text: selfMessage.info && selfMessage.info.install === "appimage"
+                          ? (applicationWindow().progress["@selfUpdate"] !== undefined ? qsTr("Updating…") : qsTr("Update now"))
+                          : qsTr("How to update")
                     icon.name: "update-none"
+                    enabled: applicationWindow().progress["@selfUpdate"] === undefined
                     onTriggered: {
                         var i = selfMessage.info
                         if (i.install === "appimage") {
@@ -123,8 +126,10 @@ ThemedPage {
                     icon.name: "software-update-available"
                     onTriggered: {
                         var a = page.allApps
+                        var busy = applicationWindow().progress
                         for (var i = 0; i < a.length; i++)
-                            if (a[i].status === "update-available") applicationWindow().backendObject.start("update", a[i].id, "", "", "")
+                            if (a[i].status === "update-available" && busy[a[i].id] === undefined)
+                                applicationWindow().backendObject.start("update", a[i].id, "", "", "")
                     }
                 }
             ]

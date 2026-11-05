@@ -38,6 +38,11 @@ pub fn ensure(dirs: &Dirs, appimage: &Path, sha256: &str) -> Result<PathBuf> {
     let result = (|| -> Result<()> {
         AppImage::open(appimage)?.extract_to(&tmp)?;
         fs::write(tmp.join(MARKER), b"").map_err(Error::io(&tmp))?;
+        if is_extracted(dirs, sha256) {
+            // Another launch finished first and may already be running from it: use theirs.
+            let _ = fs::remove_dir_all(&tmp);
+            return Ok(());
+        }
         let _ = fs::remove_dir_all(&dest); // a stale incomplete directory
         fs::rename(&tmp, &dest).map_err(Error::io(&dest))
     })();
@@ -57,10 +62,25 @@ pub fn prune(dirs: &Dirs, keep: &[String]) -> Result<usize> {
     let mut removed = 0;
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if !keep.contains(&name) {
-            fs::remove_dir_all(e.path()).map_err(Error::io(e.path()))?;
-            removed += 1;
+        if keep.contains(&name) || !e.path().is_dir() {
+            continue;
         }
+        // Another launch may still be unpacking: leave recent temporary directories alone.
+        let fresh = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age < std::time::Duration::from_secs(3600));
+        if name.starts_with(".tmp-") && fresh {
+            continue;
+        }
+        // A sandboxed app may still be running an old version from this tree.
+        if crate::running::tree_in_use(&e.path()) {
+            continue;
+        }
+        fs::remove_dir_all(e.path()).map_err(Error::io(e.path()))?;
+        removed += 1;
     }
     Ok(removed)
 }
@@ -151,9 +171,21 @@ mod tests {
         let (_t, dirs, img) = setup();
         ensure(&dirs, &img, "keep").unwrap();
         ensure(&dirs, &img, "drop").unwrap();
-        fs::create_dir_all(dirs.extract_dir().join(".tmp-leftover")).unwrap();
+        // A recent temporary directory may be another launch still unpacking; an old one is
+        // a leftover.
+        let busy = dirs.extract_dir().join(".tmp-busy");
+        let old = dirs.extract_dir().join(".tmp-leftover");
+        fs::create_dir_all(&busy).unwrap();
+        fs::create_dir_all(&old).unwrap();
+        fs::File::open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .unwrap();
+        // A stray file is not a tree and is left alone.
+        fs::write(dirs.extract_dir().join("stray"), b"x").unwrap();
         assert_eq!(prune(&dirs, &["keep".to_string()]).unwrap(), 2);
         assert!(is_extracted(&dirs, "keep") && !is_extracted(&dirs, "drop"));
+        assert!(busy.exists() && !old.exists());
         assert_eq!(
             prune(&Dirs::with_root(Path::new("/nonexistent-root")), &[]).unwrap(),
             0

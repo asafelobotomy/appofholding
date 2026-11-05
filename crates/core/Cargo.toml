@@ -3,6 +3,7 @@ name = "appofholding-core"
 description = "Core library for appofholding: AppImage parsing, library database, desktop integration"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]

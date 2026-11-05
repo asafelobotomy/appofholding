@@ -28,7 +28,7 @@ tool (`appofholding`) that share one library.
 
 ## Install
 
-Build from source (needs Rust 1.85+, Qt 6 with QtQuick, Kirigami, CMake and a C++ compiler):
+Build from source (needs Rust 1.89+, Qt 6 with QtQuick, Kirigami, CMake and a C++ compiler):
 
 ```bash
 make

@@ -44,7 +44,8 @@ fn hash_prefix(path: &Path) -> Result<Sha256> {
 /// what was written.
 ///
 /// * An interrupted download leaves `.<name>.part` behind and the next call resumes from it
-///   (falling back to a full download if the server ignores the Range request).
+///   (falling back to a full download if the server ignores the Range request). Only assets
+///   with a published SHA-256 are resumed; others start over.
 /// * If the host published a digest (or the size is known), a mismatch deletes the partial file
 ///   and fails; the final path only ever appears once the file is complete and verified.
 pub fn download_asset(
@@ -61,7 +62,13 @@ pub fn download_asset(
     let dest = dir.join(name);
     let part = dir.join(format!(".{}.part", name.to_string_lossy()));
 
-    let mut offset = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    // Resume only when the result will be verified against a published checksum. Without one, a
+    // new build published since the last attempt would be spliced onto the old one unnoticed.
+    let mut offset = if asset.sha256.is_some() {
+        fs::metadata(&part).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
     let actual = loop {
         let (file, hash) = if offset > 0 {
             let hash = hash_prefix(&part)?;
@@ -208,6 +215,23 @@ mod tests {
         assert_eq!(got, sha);
         assert_eq!(fs::read(path).unwrap(), body);
         assert!(!part.exists());
+    }
+
+    #[test]
+    fn without_a_checksum_a_partial_file_is_not_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        // Left over from an older build served at the same URL.
+        fs::write(dir.path().join(".Foo.AppImage.part"), b"OLDBUILD").unwrap();
+        let body = b"new build, complete".to_vec();
+        let http = FakeHttp::default().bytes("https://dl/x", body.clone());
+        let (path, _) = download_asset(
+            &http,
+            &asset("Foo.AppImage", None),
+            dir.path(),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
     }
 
     #[test]

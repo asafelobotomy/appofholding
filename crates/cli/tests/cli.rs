@@ -525,11 +525,22 @@ fn export_then_apply_moves_a_setup_to_another_library() {
     let o = run(b.path(), &["apply", file_b.to_str().unwrap(), "--dry-run"]);
     assert!(stdout(&o).contains("add from file"), "{}", stdout(&o));
     assert!(
+        stdout(&o).contains("runs a command: post-update hook: echo hi"),
+        "the dry run shows what would run: {}",
+        stdout(&o)
+    );
+    assert!(
         stdout(&run(b.path(), &["list"])).contains("No apps yet"),
         "dry run changes nothing"
     );
 
+    // Commands from a file are refused unless asked for.
     let o = run(b.path(), &["apply", file_b.to_str().unwrap()]);
+    assert!(!o.status.success() && stdout(&o).contains("--allow-commands"));
+    let o = run(
+        b.path(),
+        &["apply", file_b.to_str().unwrap(), "--allow-commands"],
+    );
     assert!(o.status.success(), "{}{}", stdout(&o), err(&o));
     assert!(
         stdout(&o).contains("probe: added from file"),
@@ -566,9 +577,12 @@ fn export_then_apply_moves_a_setup_to_another_library() {
     );
     // Applying twice is harmless.
     assert!(
-        run(b.path(), &["apply", file_b.to_str().unwrap()])
-            .status
-            .success()
+        run(
+            b.path(),
+            &["apply", file_b.to_str().unwrap(), "--allow-commands"]
+        )
+        .status
+        .success()
     );
 }
 

@@ -19,6 +19,31 @@
   card rows; action buttons use the new primary style.
 - Internal: lint clean (clippy) across the workspace.
 
+### Fixed (review)
+- Sandbox: `/lib64` is recreated with its real target, so sandboxed apps start on Fedora, Debian
+  and Ubuntu (it only worked where `lib64 -> usr/lib`). Apps can no longer claim the desktop's
+  D-Bus names or a whole vendor's namespace through their own `.desktop` files.
+- Updates never rename over a file that isn't the app's own, and a failure part-way through an
+  update puts the previous version back instead of leaving a broken entry. The GUI, the CLI and
+  the timer can no longer update the same app at once.
+- Versions: `2.0.0-rc1` is older than `2.0.0`, and dated builds (`nightly-2026-11-05`) compare
+  correctly.
+- Downloads give up only when they stall (60 s without data), not after a fixed total time.
+  Interrupted downloads resume only when a checksum will verify the result.
+- Sandboxed apps are recognised as running (updates wait for them, and their unpacked files are
+  kept); two first launches at once no longer delete each other's files.
+- Plain download links keep their query string and `www.`; self-hosted GitLab sources survive
+  `export`/`apply`.
+- `apply` refuses hooks, command prefixes and run-as-root profiles unless `--allow-commands` is
+  given; `--dry-run` lists them.
+- The background timer reports a failing check once per distinct problem, and never for apps set
+  to "manual".
+- When appOFholding runs as an AppImage, menu entries and the timer point at the AppImage file.
+- GUI: adding or dropping files with spaces or accents in the name works; unsaved Launch edits
+  survive background refreshes; buttons cannot start the same update twice; installs, imports
+  and self-updates have separate progress; "Download and add" installs exactly what was looked
+  up; a crashed task no longer leaves the window stuck "working".
+
 ## 0.2.0
 
 - Self-updater: `appofholding self check` / `self update` look at this project's GitHub releases.

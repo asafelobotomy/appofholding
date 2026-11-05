@@ -3,6 +3,7 @@ name = "appofholding-gui"
 description = "Qt/Kirigami interface for appOFholding"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [[bin]]

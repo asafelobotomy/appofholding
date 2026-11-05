@@ -44,9 +44,9 @@ pub struct UreqHttp {
 
 /// Small API answers (release lists, checksums) must arrive within this long.
 const API_BODY_TIMEOUT: Duration = Duration::from_secs(60);
-/// One download attempt gives up after this long, so a server that stalls mid-file cannot hang an
-/// update forever. The partial file is kept and the next attempt resumes where it stopped.
-const DOWNLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// A download that receives nothing for this long has stalled and is abandoned. There is no
+/// limit on the total time, so slow links still finish; the partial file is kept for a resume.
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 const USER_AGENT: &str = concat!("appofholding/", env!("CARGO_PKG_VERSION"));
 
@@ -148,7 +148,7 @@ impl Http for UreqHttp {
             .agent
             .get(url)
             .config()
-            .timeout_recv_body(Some(DOWNLOAD_BODY_TIMEOUT))
+            .timeout_per_read(Some(DOWNLOAD_STALL_TIMEOUT))
             .build();
         if offset > 0 {
             req = req.header("Range", format!("bytes={offset}-"));

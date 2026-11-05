@@ -160,8 +160,9 @@ ColumnLayout {
                 ColumnLayout {
                     spacing: 0
                     Layout.fillWidth: true
-                    QQC2.Label { text: modelData.label; font.weight: Font.DemiBold }
-                    QQC2.Label { text: modelData.text; opacity: 0.7; font: Kirigami.Theme.smallFont }
+                    // Filling labels let the column grow, which keeps every switch at the edge.
+                    QQC2.Label { text: modelData.label; font.weight: Font.DemiBold; Layout.fillWidth: true; elide: Text.ElideRight }
+                    QQC2.Label { text: modelData.text; opacity: 0.7; font: Kirigami.Theme.smallFont; Layout.fillWidth: true; elide: Text.ElideRight }
                 }
                 QQC2.Switch {
                     enabled: sec.enabledSandbox
@@ -281,7 +282,7 @@ ColumnLayout {
         id: folderDialog
         title: qsTr("Share a folder with this app")
         onAccepted: {
-            var path = selectedFolder.toString().replace("file://", "")
+            var path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             var p = JSON.parse(JSON.stringify(sec.s.paths || []))
             for (var i = 0; i < p.length; i++) if (p[i].path === path) return
             p.push({path: path, write: false})

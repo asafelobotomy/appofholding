@@ -111,6 +111,7 @@ Rectangle {
             text: qsTr("Update")
             icon.name: "software-update-available"
             display: QQC2.AbstractButton.IconOnly
+            Layout.preferredWidth: implicitHeight
             QQC2.ToolTip.visible: hovered
             QQC2.ToolTip.text: qsTr("Update to %1").arg(row.app.latest)
             Accessible.name: qsTr("Update %1").arg(row.app.name)

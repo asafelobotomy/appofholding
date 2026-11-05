@@ -259,7 +259,7 @@ impl Library {
     }
 }
 
-fn check_kind(kind: &str) -> Result<()> {
+pub(crate) fn check_kind(kind: &str) -> Result<()> {
     if HOOK_KINDS.contains(&kind) {
         Ok(())
     } else {
@@ -503,26 +503,7 @@ mod tests {
 
     fn bwrap_ok() -> bool {
         std::process::Command::new("bwrap")
-            .args([
-                "--unshare-all",
-                "--ro-bind",
-                "/usr",
-                "/usr",
-                "--symlink",
-                "usr/bin",
-                "/bin",
-                "--symlink",
-                "usr/lib",
-                "/lib",
-                "--symlink",
-                "usr/lib",
-                "/lib64",
-                "--proc",
-                "/proc",
-                "--dev",
-                "/dev",
-                "/bin/true",
-            ])
+            .args(crate::sandbox::probe_args())
             .output()
             .is_ok_and(|o| o.status.success())
     }

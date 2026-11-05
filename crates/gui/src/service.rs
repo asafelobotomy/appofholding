@@ -25,6 +25,13 @@ fn e<E: std::fmt::Display>(err: E) -> String {
 /// The `appofholding` command-line binary that generated menu entries call. It lives next to
 /// the GUI binary when both are installed together.
 pub fn cli_path() -> PathBuf {
+    // Running as an AppImage: the AppImage file passes `run`/`update` on to the CLI inside it.
+    if let Ok(exe) = std::env::current_exe() {
+        let stable = appofholding_core::paths::stable_exec_path(exe.clone());
+        if stable != exe {
+            return stable;
+        }
+    }
     let sibling = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("appofholding")))
@@ -659,11 +666,39 @@ pub fn self_update(
     )
 }
 
+/// A path as the desktop hands it over: a `file://` URL (percent-encoded: `My%20App.AppImage`)
+/// or a plain path, which is used as it is.
+pub fn local_path(s: &str) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let Some(rest) = s.strip_prefix("file://") else {
+        return std::path::PathBuf::from(s);
+    };
+    // `file://host/path`: only the local host is meaningful.
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
+}
+
 pub fn add_file(lib: &Library, path: &str) -> Res<Value> {
-    let path = path.strip_prefix("file://").unwrap_or(path);
+    let path = local_path(path);
     let rec = lib
         .add(
-            Path::new(path),
+            &path,
             &AddOptions {
                 install: Install::Copy,
                 id: None,
@@ -743,6 +778,22 @@ mod tests {
         assert!(theme_save(&dirs, "../evil").is_err());
         std::fs::write(theme_file(&dirs), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
+    }
+
+    #[test]
+    fn desktop_file_urls_become_real_paths() {
+        assert_eq!(
+            local_path("file:///home/u/My%20App%E2%9C%93.AppImage"),
+            Path::new("/home/u/My App✓.AppImage")
+        );
+        assert_eq!(
+            local_path("file://localhost/tmp/a%25b"),
+            Path::new("/tmp/a%b")
+        );
+        // Plain paths are taken literally, even with a % in them.
+        assert_eq!(local_path("/tmp/100%20done"), Path::new("/tmp/100%20done"));
+        // A broken escape is kept as written.
+        assert_eq!(local_path("file:///tmp/50%"), Path::new("/tmp/50%"));
     }
 
     #[test]

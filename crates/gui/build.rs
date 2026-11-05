@@ -26,6 +26,7 @@ fn main() {
                     "qml/AppMenuButton.qml",
                     "qml/SectionCard.qml",
                     "qml/ThemedPage.qml",
+                    "qml/ThemeBindings.qml",
                 ]
                 .map(QmlFile::from)
                 .into_iter()

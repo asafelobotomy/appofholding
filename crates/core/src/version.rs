@@ -29,40 +29,93 @@ impl Status {
     }
 }
 
-/// `v1.2.3` / `release-1.2.3` / `1.2.3-beta1` -> numeric components, if there are any.
-fn numeric_parts(v: &str) -> Option<Vec<u64>> {
+/// A version split into its numbers and, if it is one, its pre-release kind.
+///
+/// Numbers are the digit runs from the first digit on, separated by `.`, `-` or `_` as long as
+/// another digit follows: `v1.2.3` -> 1,2,3; `nightly-2026-11-05` -> 2026,11,5;
+/// `app2-1.4.0` -> 2,1,4,0. What follows (`-rc1`, `-beta.2`, `-x86_64`) is the suffix.
+#[derive(Debug, PartialEq, Eq)]
+struct Parsed {
+    numbers: Vec<u64>,
+    /// `None` for a release; otherwise (rank, number): dev < alpha < beta < pre < rc.
+    pre: Option<(u8, u64)>,
+}
+
+fn parse(v: &str) -> Option<Parsed> {
     let start = v.find(|c: char| c.is_ascii_digit())?;
-    let rest = &v[start..];
-    let core: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-    let parts: Vec<u64> = core
-        .split('.')
-        .filter(|p| !p.is_empty())
-        .map(|p| p.parse().ok())
-        .collect::<Option<_>>()?;
-    if parts.is_empty() { None } else { Some(parts) }
+    let bytes = &v.as_bytes()[start..];
+    let mut numbers = Vec::new();
+    let mut i = 0;
+    loop {
+        let from = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        // Absurdly long digit runs (hashes) saturate rather than fail.
+        numbers.push(
+            std::str::from_utf8(&bytes[from..i])
+                .ok()?
+                .parse()
+                .unwrap_or(u64::MAX),
+        );
+        let joins = i + 1 < bytes.len()
+            && matches!(bytes[i], b'.' | b'-' | b'_')
+            && bytes[i + 1].is_ascii_digit();
+        if !joins {
+            break;
+        }
+        i += 1;
+    }
+    let suffix = v[start + i..].to_ascii_lowercase();
+    let pre = [
+        ("dev", 0u8),
+        ("alpha", 1),
+        ("beta", 2),
+        ("preview", 3),
+        ("pre", 3),
+        ("rc", 4),
+    ]
+    .iter()
+    .find_map(|(word, rank)| {
+        // Only a whole word counts: `rc1` and `-rc.1`, but not the `rc` in `source`.
+        let at = suffix.match_indices(word).map(|(i, _)| i).find(|&i| {
+            !suffix[..i].ends_with(|c: char| c.is_ascii_alphabetic())
+                && !suffix[i + word.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
+        })?;
+        let n: String = suffix[at + word.len()..]
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        Some((*rank, n.parse().unwrap_or(0)))
+    });
+    Some(Parsed { numbers, pre })
 }
 
 fn normalize(v: &str) -> &str {
     v.trim().trim_start_matches(['v', 'V'])
 }
 
-/// Ordering when both look like dotted numbers; `None` when they can't be compared.
+/// Ordering when both contain version numbers; `None` when they can't be compared.
+/// A pre-release sorts before its release: `2.0.0-rc1` < `2.0.0` < `2.0.1`.
 pub fn compare(a: &str, b: &str) -> Option<Ordering> {
-    let (x, y) = (numeric_parts(a)?, numeric_parts(b)?);
-    let n = x.len().max(y.len());
+    let (x, y) = (parse(a)?, parse(b)?);
+    let n = x.numbers.len().max(y.numbers.len());
     for i in 0..n {
         let (p, q) = (
-            x.get(i).copied().unwrap_or(0),
-            y.get(i).copied().unwrap_or(0),
+            x.numbers.get(i).copied().unwrap_or(0),
+            y.numbers.get(i).copied().unwrap_or(0),
         );
         if p != q {
             return Some(p.cmp(&q));
         }
     }
-    Some(Ordering::Equal)
+    Some(match (x.pre, y.pre) {
+        (None, None) => Ordering::Equal,
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(p), Some(q)) => p.cmp(&q),
+    })
 }
 
 pub struct Installed<'a> {
@@ -105,7 +158,7 @@ pub fn decide(
     match compare(cur, latest_version) {
         Some(Ordering::Less) => Status::UpdateAvailable,
         Some(_) => Status::UpToDate, // never "update" to an older version
-        None => Status::UpdateAvailable, // e.g. nightly-20261105 vs nightly-20261106
+        None => Status::UpdateAvailable, // e.g. `nightly-abc` vs `nightly-def`
     }
 }
 
@@ -129,6 +182,33 @@ mod tests {
             Some(Ordering::Greater)
         );
         assert_eq!(compare("nightly", "1.0"), None);
+        // Pre-releases come before their release.
+        assert_eq!(compare("2.0.0-rc1", "v2.0.0"), Some(Ordering::Less));
+        assert_eq!(compare("2.0.0-beta.2", "2.0.0-rc1"), Some(Ordering::Less));
+        assert_eq!(compare("2.0.0-rc2", "2.0.0-rc10"), Some(Ordering::Less));
+        assert_eq!(compare("2.0.0-alpha", "1.9.9"), Some(Ordering::Greater));
+        // Dated builds and names with digits in them.
+        assert_eq!(
+            compare("nightly-2026-11-05", "nightly-2026-11-06"),
+            Some(Ordering::Less)
+        );
+        assert_eq!(compare("app2-1.4.0", "app2-1.5.0"), Some(Ordering::Less));
+        // Architecture suffixes are not pre-releases.
+        assert_eq!(compare("1.2.0-x86_64", "1.2.0"), Some(Ordering::Equal));
+        assert_eq!(compare("1.2.0-source", "1.2.0"), Some(Ordering::Equal));
+        assert_eq!(compare("1.2.0-developer", "1.2.0"), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn a_pre_release_user_is_offered_the_final_release() {
+        assert_eq!(
+            decide(&inst(Some("2.0.0-rc1"), None), "v2.0.0", None, false),
+            Status::UpdateAvailable
+        );
+        assert_eq!(
+            decide(&inst(Some("2.0.0"), None), "v2.0.0-rc1", None, false),
+            Status::UpToDate
+        );
     }
 
     #[test]

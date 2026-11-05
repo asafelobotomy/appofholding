@@ -204,7 +204,7 @@ impl qobject::Backend {
         let files: Vec<String> = std::env::args()
             .skip(1)
             .filter(|a| !a.starts_with('-'))
-            .map(|a| a.strip_prefix("file://").unwrap_or(&a).to_string())
+            .map(|a| service::local_path(&a).to_string_lossy().into_owned())
             .collect();
         q(&json!(files).to_string())
     }
@@ -341,25 +341,50 @@ impl qobject::Backend {
         let (kind, id, a, b, c) = (s(kind), s(id), s(a), s(b), s(c));
         let n = *self.tasks() + 1;
         self.as_mut().set_tasks(n);
+        // Tasks about one app report under its id; the others under "@<kind>", so an install
+        // and a self-update never share a progress bar.
+        let key = progress_key(&kind, &id);
+        // Mark the task busy at once, so a second click cannot start the same work again before
+        // the first real progress report arrives.
+        self.as_mut().progress(&q(&key), -1.0);
         let thread = self.qt_thread();
         std::thread::spawn(move || {
             let progress_thread = thread.clone();
-            let progress_id = id.clone();
+            let progress_id = key.clone();
             let mut last = -1.0f64;
+            let mut last_at = std::time::Instant::now();
             let mut progress = move |done: u64, total: Option<u64>| {
                 let f = total
                     .filter(|t| *t > 0)
                     .map_or(-1.0, |t| done as f64 / t as f64);
-                // Only tell the interface about visible changes.
-                if (f - last).abs() >= 0.005 || f < 0.0 {
+                // Only tell the interface about visible changes; without a known size, a few
+                // times a second is plenty.
+                let visible = if f < 0.0 {
+                    last >= 0.0 || last_at.elapsed() >= std::time::Duration::from_millis(250)
+                } else {
+                    (f - last).abs() >= 0.005
+                };
+                if visible {
                     last = f;
+                    last_at = std::time::Instant::now();
                     let pid = progress_id.clone();
                     let _ = progress_thread.queue(move |mut qobj: Pin<&mut qobject::Backend>| {
                         qobj.as_mut().progress(&q(&pid), f);
                     });
                 }
             };
-            let result = run_task(&kind, &id, &a, &b, &c, &mut progress);
+            // A bug in a task must not leave the interface waiting forever.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_task(&kind, &id, &a, &b, &c, &mut progress)
+            }))
+            .unwrap_or_else(|panic| {
+                let what = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown error");
+                Err(format!("internal error in {kind}: {what}"))
+            });
             let (ok, payload) = match result {
                 Ok(v) => (true, v.to_string()),
                 Err(e) => (false, e),
@@ -370,6 +395,15 @@ impl qobject::Backend {
                 qobj.as_mut().finished(&q(&kind), &q(&id), ok, &q(&payload));
             });
         });
+    }
+}
+
+/// The key a task's progress is reported under (see `start`).
+pub fn progress_key(kind: &str, id: &str) -> String {
+    if id.is_empty() {
+        format!("@{kind}")
+    } else {
+        id.to_string()
     }
 }
 

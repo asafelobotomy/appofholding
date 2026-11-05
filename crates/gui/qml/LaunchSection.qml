@@ -14,6 +14,9 @@ ColumnLayout {
     property string profileName: "default"
     property string previewText
     property bool showFull: false
+    // Edits not saved yet. A reload (another app's update, a check finishing) must not wipe them.
+    property bool dirty: false
+    property string loadedFor
 
     spacing: Kirigami.Units.largeSpacing
 
@@ -21,6 +24,8 @@ ColumnLayout {
 
     function loadProfile(name) {
         profileName = name
+        dirty = false
+        loadedFor = appId
         var r = Util.parse(backend.profileDetail(appId, name))
         form = r.error ? ({}) : r
         refreshPreview()
@@ -49,7 +54,10 @@ ColumnLayout {
 
     onDetailChanged: if (detail.id) {
         presets = Util.parse(backend.presets())
-        loadProfile(detail.profiles && detail.profiles.indexOf(profileName) >= 0 ? profileName : "default")
+        var keep = detail.profiles && detail.profiles.indexOf(profileName) >= 0
+        // Keep unsaved edits when the same app's details are merely refreshed.
+        if (dirty && keep && loadedFor === appId) return
+        loadProfile(keep ? profileName : "default")
     }
 
     // ---- profile + quick fixes
@@ -77,7 +85,10 @@ ColumnLayout {
                 icon.name: "edit-delete"
                 visible: sec.profileName !== "default"
                 onClicked: {
-                    sec.notify(sec.backend.deleteProfile(sec.appId, sec.profileName))
+                    var err = sec.backend.deleteProfile(sec.appId, sec.profileName)
+                    sec.notify(err)
+                    if (err) return
+                    sec.dirty = false
                     sec.profileName = "default"
                     applicationWindow().reload()
                 }
@@ -102,6 +113,7 @@ ColumnLayout {
                     checkable: true
                     closable: false
                     checked: (sec.form.presets || []).indexOf(modelData.name) >= 0
+                    onToggled: sec.dirty = true
                     QQC2.ToolTip.visible: hovered
                     QQC2.ToolTip.text: modelData.description
                     QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
@@ -122,6 +134,7 @@ ColumnLayout {
                 Kirigami.FormData.label: qsTr("Extra arguments:")
                 text: sec.form.args || ""
                 placeholderText: qsTr("--flag \"value with spaces\"")
+                onTextEdited: sec.dirty = true
                 Layout.fillWidth: true
                 Layout.minimumWidth: Kirigami.Units.gridUnit * 18
             }
@@ -130,6 +143,7 @@ ColumnLayout {
                 Kirigami.FormData.label: qsTr("Environment:")
                 text: sec.form.env || ""
                 placeholderText: qsTr("NAME=value, one per line")
+                onTextChanged: if (activeFocus) sec.dirty = true
                 font.family: "monospace"
                 Layout.fillWidth: true
                 Layout.minimumWidth: Kirigami.Units.gridUnit * 18
@@ -140,6 +154,7 @@ ColumnLayout {
                 Kirigami.FormData.label: qsTr("Run under:")
                 text: sec.form.prefix || ""
                 placeholderText: qsTr("e.g. gamemoderun")
+                onTextEdited: sec.dirty = true
                 Layout.fillWidth: true
                 Layout.minimumWidth: Kirigami.Units.gridUnit * 18
             }
@@ -147,6 +162,7 @@ ColumnLayout {
                 id: cwd
                 Kirigami.FormData.label: qsTr("Working folder:")
                 text: sec.form.cwd || ""
+                onTextEdited: sec.dirty = true
                 Layout.fillWidth: true
                 Layout.minimumWidth: Kirigami.Units.gridUnit * 18
             }
@@ -154,11 +170,13 @@ ColumnLayout {
                 id: extract
                 text: qsTr("Unpack instead of mounting (no FUSE needed)")
                 checked: !!sec.form.extractAndRun
+                onToggled: sec.dirty = true
             }
             QQC2.CheckBox {
                 id: elevated
                 text: qsTr("Run as administrator (root)")
                 checked: !!sec.form.elevated
+                onToggled: sec.dirty = true
             }
         }
         Kirigami.InlineMessage {
@@ -174,7 +192,11 @@ ColumnLayout {
                 onClicked: {
                     var err = sec.backend.saveProfile(sec.appId, sec.profileName, JSON.stringify(sec.collect()))
                     sec.notify(err)
-                    if (!err) { sec.refreshPreview(); applicationWindow().showPassiveNotification(qsTr("Launch settings saved")) }
+                    if (!err) {
+                        sec.dirty = false
+                        applicationWindow().showPassiveNotification(qsTr("Launch settings saved"))
+                        applicationWindow().reload()   // the Overview summarises these settings
+                    }
                 }
             }
         }
@@ -230,12 +252,15 @@ ColumnLayout {
                     Kirigami.FormData.label: modelData.label
                     Layout.fillWidth: true
                     Layout.minimumWidth: Kirigami.Units.gridUnit * 18
-                    text: {
+                    // Set by hand, not bound: a refresh while typing must not replace the text.
+                    readonly property string saved: {
                         var hs = sec.detail.hooks || []
                         for (var i = 0; i < hs.length; i++) if (hs[i].kind === modelData.kind) return hs[i].command
                         return ""
                     }
-                    onEditingFinished: sec.notify(sec.backend.setHook(sec.appId, modelData.kind, text))
+                    onSavedChanged: if (!activeFocus) text = saved
+                    Component.onCompleted: text = saved
+                    onEditingFinished: if (text !== saved) sec.notify(sec.backend.setHook(sec.appId, modelData.kind, text))
                 }
             }
         }

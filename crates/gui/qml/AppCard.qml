@@ -143,6 +143,8 @@ Rectangle {
             text: qsTr("Update")
             icon.name: "software-update-available"
             display: card.compact ? QQC2.AbstractButton.IconOnly : QQC2.AbstractButton.TextBesideIcon
+            // Some styles size an icon-only button for its hidden text; keep it square.
+            Layout.preferredWidth: card.compact ? implicitHeight : -1
             QQC2.ToolTip.visible: hovered && card.compact
             QQC2.ToolTip.text: qsTr("Update to %1").arg(card.app.latest)
             Accessible.name: qsTr("Update %1").arg(card.app.name)
@@ -153,6 +155,7 @@ Rectangle {
             icon.name: "media-playback-start"
             flat: card.hasUpdate
             display: card.compact ? QQC2.AbstractButton.IconOnly : QQC2.AbstractButton.TextBesideIcon
+            Layout.preferredWidth: card.compact ? implicitHeight : -1
             QQC2.ToolTip.visible: hovered && card.compact
             QQC2.ToolTip.text: qsTr("Open %1").arg(card.app.name)
             Accessible.name: qsTr("Open %1").arg(card.app.name)

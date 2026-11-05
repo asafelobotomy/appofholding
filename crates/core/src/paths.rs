@@ -109,6 +109,29 @@ impl Dirs {
 }
 
 /// Name (without extension) used for the generated `.desktop` file and icon.
+/// The path to write into menu entries and the timer unit for a program at `exe`. When
+/// appOFholding itself runs as an AppImage, `exe` is inside its temporary mount, which vanishes
+/// when it exits; the AppImage file itself (`$APPIMAGE`) is the stable path, and it hands `run`
+/// and `update` on to the command-line tool.
+pub fn stable_exec_path(exe: PathBuf) -> PathBuf {
+    stable_exec_path_with(
+        exe,
+        std::env::var_os("APPIMAGE").map(PathBuf::from),
+        std::env::var_os("APPDIR").map(PathBuf::from),
+    )
+}
+
+fn stable_exec_path_with(
+    exe: PathBuf,
+    appimage: Option<PathBuf>,
+    appdir: Option<PathBuf>,
+) -> PathBuf {
+    match (appimage, appdir) {
+        (Some(image), Some(dir)) if exe.starts_with(&dir) && image.is_absolute() => image,
+        _ => exe,
+    }
+}
+
 pub fn desktop_id(id: &str) -> String {
     format!("appofholding-{id}")
 }
@@ -129,6 +152,30 @@ pub fn slugify(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn inside_its_own_appimage_the_appimage_file_is_the_stable_path() {
+        use std::path::PathBuf;
+        let exe = PathBuf::from("/tmp/.mount_abc/usr/bin/appofholding");
+        assert_eq!(
+            super::stable_exec_path_with(
+                exe.clone(),
+                Some("/home/u/Applications/appofholding.AppImage".into()),
+                Some("/tmp/.mount_abc".into())
+            ),
+            PathBuf::from("/home/u/Applications/appofholding.AppImage")
+        );
+        // Started by some other AppImage (inherited variables), or installed normally.
+        assert_eq!(
+            super::stable_exec_path_with(
+                PathBuf::from("/usr/bin/appofholding"),
+                Some("/x/Other.AppImage".into()),
+                Some("/tmp/.mount_zzz".into())
+            ),
+            PathBuf::from("/usr/bin/appofholding")
+        );
+        assert_eq!(super::stable_exec_path_with(exe.clone(), None, None), exe);
+    }
+
     use super::*;
 
     #[test]

@@ -20,7 +20,36 @@ fn apply_theme() -> bool {
     true
 }
 
+/// When appOFholding is packaged as an AppImage, its menu entries and timer call the AppImage
+/// file, which starts this binary: hand those command-line jobs to the CLI next to it.
+fn forward_cli_commands() {
+    use std::os::unix::process::CommandExt;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let is_cli = args
+        .first()
+        .is_some_and(|a| a == "run" || a == "update" || a == "--cli");
+    if !is_cli {
+        return;
+    }
+    let Some(cli) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("appofholding")))
+        .filter(|p| p.exists())
+    else {
+        return;
+    };
+    let rest = if args[0] == "--cli" {
+        &args[1..]
+    } else {
+        &args[..]
+    };
+    let err = std::process::Command::new(cli).args(rest).exec();
+    eprintln!("appofholding-gui: could not start the command-line tool: {err}");
+    std::process::exit(127);
+}
+
 fn main() {
+    forward_cli_commands();
     let mut app = QGuiApplication::new();
     // A custom palette needs a style that obeys it; the desktop style follows the system.
     let themed = apply_theme();

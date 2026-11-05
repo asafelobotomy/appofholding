@@ -130,8 +130,9 @@ section "7. export / apply"
 check "export"                    $B export -o "$TMP/setup.toml"
 expect "export names the source"  "github.com/asafelobotomy/scale_tail" cat "$TMP/setup.toml"
 check "export has no machine-specific paths" bash -c "! grep -q $HOME $TMP/setup.toml"
-check "apply dry run"             $B apply "$TMP/setup.toml" --dry-run
-check "apply is idempotent"       $B apply "$TMP/setup.toml" --no-install
+expect "apply dry run lists commands" "runs a command: post-install hook" $B apply "$TMP/setup.toml" --dry-run
+check "apply refuses commands unless allowed" bash -c "! $B apply '$TMP/setup.toml' --no-install >/dev/null 2>&1"
+check "apply is idempotent"       $B apply "$TMP/setup.toml" --no-install --allow-commands
 
 section "8. background timer (real systemd --user)"
 check "schedule install"          $B schedule install --interval daily

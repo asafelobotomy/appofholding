@@ -270,6 +270,7 @@ impl Library {
         if !opts.force && rec.skipped_version.as_deref() == Some(tag.as_str()) {
             return Ok(Applied::Skipped(format!("version {tag} was skipped")));
         }
+        let _lock = self.lock_app(id)?;
         let pids = running::running_pids(&app.appimage_path);
         if opts.if_running == IfRunning::Defer && !pids.is_empty() {
             return Ok(Applied::Deferred { version: tag, pids });
@@ -371,10 +372,23 @@ impl Library {
         let file_name = Path::new(new_name)
             .file_name()
             .ok_or_else(|| Error::Source(format!("bad file name '{new_name}'")))?;
-        let dest = dir.join(file_name);
+        // Never rename over a file that is not this app's (another app's AppImage with the same
+        // asset name, or anything else the user keeps there): fall back to an id-prefixed name.
+        let mut dest = dir.join(file_name);
+        if &dest != cur && dest.exists() {
+            dest = dir.join(format!("{}-{}", app.id, file_name.to_string_lossy()));
+            if &dest != cur && dest.exists() {
+                return Err(Error::Other(format!(
+                    "cannot install {}: {} already exists and belongs to something else",
+                    file_name.to_string_lossy(),
+                    dest.display()
+                )));
+            }
+        }
 
         // 1. Keep the current file (hard link where possible, so no extra disk space until
-        //    the original is replaced).
+        //    the original is replaced). The backup's name includes the build's hash, so one
+        //    left behind by an interrupted update is the same file and is reused, never deleted.
         let known = self.db.list_versions(&app.id)?;
         let have_backup = known
             .iter()
@@ -385,22 +399,23 @@ impl Library {
             slugify(current_version.unwrap_or("unknown")),
             &app.sha256[..app.sha256.len().min(8)]
         ));
-        if !have_backup {
+        let mut made_backup = false;
+        if !have_backup && !backup.exists() {
             fs::create_dir_all(&vdir).map_err(Error::io(&vdir))?;
-            let _ = fs::remove_file(&backup);
             if fs::hard_link(cur, &backup).is_err() {
                 fs::copy(cur, &backup).map_err(Error::io(&backup))?;
             }
+            made_backup = true;
         }
         let undo_backup = || {
-            if !have_backup {
+            if made_backup {
                 let _ = fs::remove_file(&backup);
             }
         };
 
         // 2. Stage the new file beside the destination (same filesystem => atomic rename).
         let stage = dir.join(format!(".{}.appofholding-new", file_name.to_string_lossy()));
-        let staged = (|| -> Result<()> {
+        let staged = (|| -> Result<(String, u64)> {
             if fs::rename(new_file, &stage).is_err() {
                 fs::copy(new_file, &stage).map_err(Error::io(&stage))?;
                 let _ = fs::remove_file(new_file);
@@ -409,58 +424,124 @@ impl Library {
                 .map_err(Error::io(&stage))?
                 .permissions();
             perms.set_mode(perms.mode() | 0o755);
-            fs::set_permissions(&stage, perms).map_err(Error::io(&stage))
+            fs::set_permissions(&stage, perms).map_err(Error::io(&stage))?;
+            image::hash_file(&stage)
         })();
-        if let Err(e) = staged {
-            let _ = fs::remove_file(&stage);
-            undo_backup();
-            return Err(e);
-        }
+        let (sha256, size) = match staged {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = fs::remove_file(&stage);
+                undo_backup();
+                return Err(e);
+            }
+        };
 
-        // 3. Swap. Renaming over an existing file is atomic: the path is never missing.
+        // 3. Swap. Renaming over an existing file is atomic: the path is never missing. The old
+        //    file (when the name changes) is only removed once everything else has succeeded.
         if let Err(e) = fs::rename(&stage, &dest) {
             let _ = fs::remove_file(&stage);
             undo_backup();
             return Err(Error::io(&dest)(e));
         }
+
+        // 4. Refresh generated integration and the database.
+        let finish = || -> Result<AppRecord> {
+            let (desktop_file, icon_file) = self.write_integration(&ins, &app.id)?;
+            let rec = AppRecord {
+                id: app.id.clone(),
+                name: ins.name.clone(),
+                appimage_path: dest.clone(),
+                desktop_file,
+                icon_file,
+                // Not every AppImage says its version; fall back to what the source told us.
+                version: ins.version.clone().or(version_hint.map(str::to_string)),
+                sha256: sha256.clone(),
+                size,
+                appimage_type: ins.image.kind,
+                update_info: ins.image.update_info.clone(),
+                added_at: app.added_at,
+                external_file: app.external_file,
+            };
+            self.db.update_app(&rec)?;
+            if !have_backup {
+                let orig = cur
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.db.add_version(
+                    &app.id,
+                    current_version,
+                    &app.sha256,
+                    &orig,
+                    &backup,
+                    now(),
+                )?;
+            }
+            Ok(rec)
+        };
+        let rec = match finish() {
+            Ok(rec) => rec,
+            Err(e) => {
+                // Put the old version back exactly as it was.
+                if &dest != cur {
+                    let _ = fs::remove_file(&dest);
+                } else {
+                    let back = dir.join(format!(
+                        ".{}.appofholding-restore",
+                        file_name.to_string_lossy()
+                    ));
+                    let _ = fs::remove_file(&back);
+                    if fs::hard_link(&backup, &back).is_ok() || fs::copy(&backup, &back).is_ok() {
+                        let _ = fs::rename(&back, cur);
+                    }
+                }
+                if let Ok(old) = inspect(cur) {
+                    let _ = self.write_integration(&old, &app.id);
+                }
+                let _ = self.db.update_app(app);
+                if &dest == cur {
+                    // The backup is the only other copy until the database knows about it.
+                } else {
+                    undo_backup();
+                }
+                return Err(e);
+            }
+        };
         if &dest != cur {
             let _ = fs::remove_file(cur);
         }
-
-        // 4. Refresh generated integration and the database.
-        let (sha256, size) = image::hash_file(&dest)?;
-        let (desktop_file, icon_file) = self.write_integration(&ins, &app.id)?;
-        if let (Some(old), new) = (&app.icon_file, &icon_file)
+        if let (Some(old), new) = (&app.icon_file, &rec.icon_file)
             && Some(old) != new.as_ref()
         {
             let _ = fs::remove_file(old);
         }
-        let rec = AppRecord {
-            id: app.id.clone(),
-            name: ins.name.clone(),
-            appimage_path: dest,
-            desktop_file,
-            icon_file,
-            // Not every AppImage says its version; fall back to what the source told us.
-            version: ins.version.clone().or(version_hint.map(str::to_string)),
-            sha256,
-            size,
-            appimage_type: ins.image.kind,
-            update_info: ins.image.update_info.clone(),
-            added_at: app.added_at,
-            external_file: app.external_file,
-        };
-        self.db.update_app(&rec)?;
-        if !have_backup {
-            let orig = cur
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            self.db
-                .add_version(&app.id, current_version, &app.sha256, &orig, &backup, now())?;
+        // Old versions are housekeeping: failing to delete one must not fail the update.
+        if let Err(e) = self.prune_versions(&app.id, keep) {
+            self.warn(format!("{}: could not remove an old version: {e}", app.id));
         }
-        self.prune_versions(&app.id, keep)?;
         Ok(rec)
+    }
+
+    /// Hold this while changing an app's files, so the GUI, the command line and the
+    /// background timer never update (or roll back) the same app at the same time. The lock is
+    /// released when the returned file is dropped, including when the process dies.
+    pub(crate) fn lock_app(&self, id: &str) -> Result<fs::File> {
+        let dir = self.dirs.app_data_dir().join("locks");
+        fs::create_dir_all(&dir).map_err(Error::io(&dir))?;
+        let path = dir.join(format!("{id}.lock"));
+        let f = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(Error::io(&path))?;
+        match f.try_lock() {
+            Ok(()) => Ok(f),
+            Err(fs::TryLockError::WouldBlock) => Err(Error::Other(format!(
+                "'{id}' is already being updated by another appOFholding window or task; try again when it has finished"
+            ))),
+            Err(fs::TryLockError::Error(e)) => Err(Error::io(&path)(e)),
+        }
     }
 
     fn prune_versions(&self, id: &str, keep: usize) -> Result<()> {
@@ -480,6 +561,7 @@ impl Library {
     /// and the version you rolled back from is marked skipped so auto-update doesn't undo it.
     pub fn rollback(&self, id: &str, to: Option<&str>) -> Result<AppRecord> {
         let app = self.get(id)?;
+        let _lock = self.lock_app(id)?;
         let versions = self.db.list_versions(id)?;
         if versions.is_empty() {
             return Err(Error::Source(format!(
@@ -561,7 +643,12 @@ impl Library {
             out.push(match self.scheduled_one(http, notifier, &rec, &name, pre) {
                 Ok(o) => o,
                 Err(e) => {
-                    notifier.notify(&format!("{name}: update check failed"), &e.to_string());
+                    // Say so once per distinct problem, not on every run, and never for apps the
+                    // user asked to keep quiet about.
+                    let new_problem = rec.last_error.as_deref() != Some(e.to_string().as_str());
+                    if new_problem && rec.policy != Policy::Manual {
+                        notifier.notify(&format!("{name}: update check failed"), &e.to_string());
+                    }
                     Outcome::Failed {
                         id,
                         error: e.to_string(),
@@ -737,6 +824,37 @@ mod tests {
             apply(&e, &http, &ApplyOptions::default()).unwrap(),
             Applied::NoUpdate(Status::UpToDate)
         );
+    }
+
+    #[test]
+    fn an_update_never_overwrites_a_file_that_is_not_this_apps() {
+        let e = env();
+        let old = installed(&e);
+        let dir = old.appimage_path.parent().unwrap();
+        // Something else already uses the new version's file name (e.g. another app).
+        let squatter = dir.join("Foo-2.0.0-x86_64.AppImage");
+        fs::write(&squatter, b"someone else's file").unwrap();
+        apply(&e, &github("2.0.0"), &ApplyOptions::default()).unwrap();
+        assert_eq!(fs::read(&squatter).unwrap(), b"someone else's file");
+        let app = e.lib.get("foo-app").unwrap();
+        assert!(
+            app.appimage_path
+                .ends_with("foo-app-Foo-2.0.0-x86_64.AppImage"),
+            "{}",
+            app.appimage_path.display()
+        );
+        assert!(app.appimage_path.exists() && !old.appimage_path.exists());
+    }
+
+    #[test]
+    fn two_updates_of_the_same_app_cannot_run_at_once() {
+        let e = env();
+        installed(&e);
+        let held = e.lib.lock_app("foo-app").unwrap();
+        let err = apply(&e, &github("2.0.0"), &ApplyOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("already being updated"), "{err}");
+        drop(held);
+        assert!(apply(&e, &github("2.0.0"), &ApplyOptions::default()).is_ok());
     }
 
     #[test]
@@ -1019,6 +1137,14 @@ mod tests {
         let failing = e.lib.run_scheduled(&FakeHttp::default(), &notes).unwrap();
         assert!(matches!(&failing[0], Outcome::Failed { .. }));
         assert_eq!(notes.0.borrow().len(), 2);
+        // ...and the same problem again is not announced again.
+        let again = e.lib.run_scheduled(&FakeHttp::default(), &notes).unwrap();
+        assert!(matches!(&again[0], Outcome::Failed { .. }));
+        assert_eq!(
+            notes.0.borrow().len(),
+            2,
+            "one notification per distinct problem"
+        );
         assert!(
             e.lib
                 .source("foo-app")

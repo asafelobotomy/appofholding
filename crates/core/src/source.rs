@@ -233,11 +233,21 @@ pub fn parse_input(input: &str) -> Result<Parsed> {
         }
         "gitlab" => parse_gitlab(&host, &segs),
         _ => {
-            check_http(&full)?;
-            let provider = if full.ends_with(".zsync") {
-                Provider::Zsync { url: full }
+            // A plain download link is used exactly as given (query string, `www.` and all);
+            // only a `#fragment`, which never reaches the server, is dropped.
+            let given = rest.trim();
+            let given = given.split('#').next().unwrap_or(given);
+            let url = if given.contains("://") {
+                given.to_string()
             } else {
-                Provider::Url { url: full }
+                format!("https://{given}")
+            };
+            check_http(&url)?;
+            let path_only = url.split('?').next().unwrap_or(&url);
+            let provider = if path_only.ends_with(".zsync") {
+                Provider::Zsync { url }
+            } else {
+                Provider::Url { url }
             };
             Ok(parsed(Source::new(provider)))
         }
@@ -484,7 +494,15 @@ mod tests {
         assert_eq!(
             p.source.provider,
             Provider::Url {
-                url: "https://example.com/dl/Foo.AppImage".into()
+                url: "https://example.com/dl/Foo.AppImage?x=1".into()
+            }
+        );
+        // Download links are kept exactly: the query picks the file and `www.` may matter.
+        let p = parse_input("https://www.vendor.com/dl?os=linux&fmt=appimage#top").unwrap();
+        assert_eq!(
+            p.source.provider,
+            Provider::Url {
+                url: "https://www.vendor.com/dl?os=linux&fmt=appimage".into()
             }
         );
         assert!(parse_input("").is_err());

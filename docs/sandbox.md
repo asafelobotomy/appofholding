@@ -26,7 +26,9 @@ starts the app without the sandbox once, for debugging.
 - Its **private home** (`~/.local/share/appofholding/apps/<id>/home`) persists between runs and
   is kept when you remove the app, unless you pass `--purge-data`.
 - The filtered session bus uses `xdg-dbus-proxy`: portals, notifications and tray icons work;
-  other services are invisible. Apps may own the D-Bus names their `.desktop` files declare.
+  other services are invisible. Apps may own the D-Bus names their `.desktop` files declare, as
+  long as those have at least three parts and are not the desktop's own (`org.freedesktop.*`,
+  `org.gnome.*`, KDE's wallet and shell, ...).
 - Chromium and Electron apps cannot nest their own sandbox inside this one, so `--no-sandbox` is
   added automatically (`--chromium-workaround false` turns that off).
 
@@ -37,6 +39,13 @@ This is real isolation but weaker than Flatpak:
 - there is no per-app D-Bus identity and no portal document store, so file pickers return real
   paths; use `--allow` for folders an app needs;
 - an app with `--home rw` or `--bus full` can do a lot of damage;
+- on an X11 session (or with XWayland), any app that can draw windows can read keystrokes and
+  inject input into other X11 windows: both levels keep the display. `--display false` hides
+  the X11 socket file, but while the network is on the app can still reach X through its
+  abstract socket, so it only really cuts X11 off together with `--network false`;
+- each launch is its own sandbox, so a second launch of a "single instance" app (opening a link
+  from another program, for example) cannot hand over to the one already running and may
+  complain that its profile is in use;
 - a kernel or bubblewrap bug breaks any sandbox.
 
 Run `appofholding sandbox check` to see whether your machine can run sandboxes.

@@ -8,6 +8,9 @@ import org.kde.kirigami as Kirigami
 QQC2.Button {
     id: button
     property color tone: Kirigami.Theme.positiveTextColor
-    font.weight: Font.DemiBold
-    palette.button: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, tone, button.down ? 0.55 : button.hovered ? 0.42 : 0.32)
+    font.weight: enabled ? Font.DemiBold : Font.Normal
+    // A disabled primary button must not look ready to press: almost no tint, and faded.
+    palette.button: Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, tone,
+        !button.enabled ? 0.08 : button.down ? 0.55 : button.hovered ? 0.42 : 0.32)
+    opacity: enabled ? 1 : 0.6
 }
