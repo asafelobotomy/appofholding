@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::error::{Error, Result};
+use crate::sandbox::Helper;
 
 pub const DEFAULT_PROFILE: &str = "default";
 
@@ -135,16 +136,38 @@ pub const SESSION_ENV: &[&str] = &[
 ];
 
 /// A concrete command line, ready to run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Plan {
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
+    /// A process that must be running before `argv` starts (the filtered D-Bus proxy).
+    pub helper: Option<Helper>,
+    /// Things worth telling the user (workarounds applied, missing sockets, ...).
+    pub notes: Vec<String>,
 }
 
 impl Plan {
     /// A copy-pasteable shell rendering, environment first.
     pub fn display(&self) -> String {
+        let helper = self
+            .helper
+            .as_ref()
+            .map(|h| {
+                format!(
+                    "# first, in the background: {}\n",
+                    h.argv
+                        .iter()
+                        .map(|a| shell_quote(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            })
+            .unwrap_or_default();
+        helper + &self.display_command()
+    }
+
+    fn display_command(&self) -> String {
         let mut parts: Vec<String> = self
             .env
             .iter()
@@ -156,6 +179,65 @@ impl Plan {
             Some(d) => format!("cd {} && {line}", shell_quote(&d.to_string_lossy())),
             None => line,
         }
+    }
+
+    /// Run to completion and return the exit code, managing the helper process (if any).
+    /// Without a helper, callers can simply `exec` [`Plan::command`] instead.
+    pub fn run(&self) -> Result<i32> {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+
+        let mut helper_child = None;
+        let mut keep_alive = None; // dropping this ends the helper
+        if let Some(h) = &self.helper {
+            let _ = std::fs::remove_file(&h.ready); // a stale socket would look like success
+            let (reader, writer) =
+                std::io::pipe().map_err(|e| Error::Other(format!("pipe: {e}")))?;
+            keep_alive = Some(writer);
+            let mut c = Command::new(&h.argv[0])
+                .args(&h.argv[1..])
+                .stdin(Stdio::from(reader))
+                .stdout(Stdio::null())
+                .spawn()
+                .map_err(|e| {
+                    Error::Other(format!("could not start {} ({e}); install xdg-dbus-proxy or use `--bus off` / `--bus full`", h.argv[0]))
+                })?;
+            let start = Instant::now();
+            while !h.ready.exists() {
+                if let Ok(Some(status)) = c.try_wait() {
+                    return Err(Error::Other(format!(
+                        "{} exited early ({status})",
+                        h.argv[0]
+                    )));
+                }
+                if start.elapsed() > Duration::from_secs(5) {
+                    let _ = c.kill();
+                    return Err(Error::Other(format!(
+                        "{} did not become ready in time",
+                        h.argv[0]
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            helper_child = Some(c);
+        }
+        let status = self
+            .command()
+            .status()
+            .map_err(|e| Error::Other(format!("failed to start {}: {e}", self.argv[0])));
+        if let Some(mut c) = helper_child {
+            let _ = c.kill();
+            let _ = c.wait();
+            if let Some(h) = &self.helper {
+                let _ = std::fs::remove_file(&h.ready);
+            }
+        }
+        drop(keep_alive);
+        let status = status?;
+        Ok(status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
     }
 
     pub fn command(&self) -> Command {
@@ -239,8 +321,22 @@ pub fn plan(
     elevator: Option<Elevator>,
     session_env: &[(String, String)],
 ) -> Result<Plan> {
-    profile.validate()?;
+    let Resolved { env, app_args, .. } = resolve(profile, passthrough)?;
+    plan_from(appimage, profile, env, app_args, elevator, session_env)
+}
 
+/// A profile with presets expanded: everything except how the program gets started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    pub env: BTreeMap<String, String>,
+    /// Preset args, then profile args, then the pass-through args.
+    pub app_args: Vec<String>,
+    pub prefix: Vec<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+pub fn resolve(profile: &Profile, passthrough: &[String]) -> Result<Resolved> {
+    profile.validate()?;
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     let mut app_args: Vec<String> = Vec::new();
     for name in &profile.presets {
@@ -251,6 +347,22 @@ pub fn plan(
     app_args.extend(profile.args.iter().cloned());
     app_args.extend(passthrough.iter().cloned());
     env.extend(profile.env.clone());
+    Ok(Resolved {
+        env,
+        app_args,
+        prefix: profile.prefix.clone(),
+        cwd: profile.cwd.clone(),
+    })
+}
+
+fn plan_from(
+    appimage: &Path,
+    profile: &Profile,
+    mut env: BTreeMap<String, String>,
+    app_args: Vec<String>,
+    elevator: Option<Elevator>,
+    session_env: &[(String, String)],
+) -> Result<Plan> {
     if profile.extract_and_run {
         // Understood by every type-2 runtime; avoids needing FUSE.
         env.insert("APPIMAGE_EXTRACT_AND_RUN".into(), "1".into());
@@ -297,6 +409,7 @@ pub fn plan(
         argv,
         env: plan_env,
         cwd,
+        ..Default::default()
     })
 }
 
@@ -471,8 +584,8 @@ mod tests {
     fn display_quotes_for_the_shell() {
         let pl = Plan {
             argv: vec!["/a b/F".into(), "it's".into()],
-            env: vec![],
             cwd: Some("/x y".into()),
+            ..Default::default()
         };
         assert_eq!(pl.display(), "cd '/x y' && '/a b/F' 'it'\\''s'");
     }

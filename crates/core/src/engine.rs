@@ -336,6 +336,7 @@ impl Library {
             .record_check(id, now(), Some(Status::UpToDate.as_str()), None, Some(&tag))?;
         self.db.set_notified(id, None)?;
         self.db.set_etag(id, None, None)?;
+        let _ = self.gc_extracted();
         let _ = fs::remove_dir_all(&dir);
         if let Some(cmd) = hook("post-update") {
             let now_installed = self.get(id)?;

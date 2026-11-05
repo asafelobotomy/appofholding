@@ -10,7 +10,8 @@ use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
 use appofholding_core::http::UreqHttp;
 use appofholding_core::launch;
 use appofholding_core::notify::NotifySend;
-use appofholding_core::profiles;
+use appofholding_core::profiles::{self, LaunchCtx};
+use appofholding_core::sandbox::{self, Bus, HomeAccess, Level, PathGrant};
 use appofholding_core::schedule::{self, Interval};
 use appofholding_core::source::Policy;
 use appofholding_core::source::{self, Channel, Source};
@@ -59,6 +60,9 @@ enum Cmd {
         /// Keep the AppImage file on disk.
         #[arg(long)]
         keep_file: bool,
+        /// Also delete the app's private sandbox home (its settings and files). Cannot be undone.
+        #[arg(long)]
+        purge_data: bool,
     },
     /// Inspect or change where an app gets its updates from.
     #[command(subcommand)]
@@ -102,6 +106,9 @@ enum Cmd {
     /// Install or remove the systemd timer that checks for updates in the background.
     #[command(subcommand)]
     Schedule(ScheduleCmd),
+    /// Run an app inside a bubblewrap sandbox with limited access to your files, network, etc.
+    #[command(subcommand)]
+    Sandbox(SandboxCmd),
     /// View and change how an app is launched: arguments, environment, presets, hooks.
     #[command(subcommand)]
     Launch(LaunchCmd),
@@ -114,11 +121,60 @@ enum Cmd {
         /// Print the command instead of running it.
         #[arg(long)]
         print: bool,
+        /// Run without the sandbox this once (for debugging).
+        #[arg(long)]
+        unsandboxed: bool,
         id: String,
         /// Arguments passed to the application.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum SandboxCmd {
+    /// Show an app's sandbox settings.
+    Show { id: String },
+    /// Change sandbox settings. Only the options you give are changed; `--level` starts from a preset.
+    Set {
+        id: String,
+        /// none, standard or strict (resets everything except shared folders to that preset).
+        #[arg(long)]
+        level: Option<String>,
+        #[arg(long)]
+        network: Option<bool>,
+        /// private (own empty home), ro (your home, read-only) or rw (your home, writable).
+        #[arg(long)]
+        home: Option<String>,
+        #[arg(long)]
+        gpu: Option<bool>,
+        #[arg(long)]
+        audio: Option<bool>,
+        /// Cameras and other media devices.
+        #[arg(long)]
+        devices: Option<bool>,
+        /// Wayland / X11 access (off = the app cannot open windows).
+        #[arg(long)]
+        display: Option<bool>,
+        /// off, filtered (portals, notifications, tray) or full.
+        #[arg(long)]
+        bus: Option<String>,
+        /// Share a folder: PATH (read-only) or PATH:rw (writable). Repeat; adds to the list.
+        #[arg(long)]
+        allow: Vec<String>,
+        /// Forget all shared folders first.
+        #[arg(long)]
+        clear_allow: bool,
+        /// Add --no-sandbox for Chromium/Electron apps (needed inside this sandbox).
+        #[arg(long)]
+        chromium_workaround: Option<bool>,
+    },
+    /// Unpack an app now instead of at its first sandboxed launch.
+    Prepare { id: String },
+    /// Delete unpacked copies nothing needs any more.
+    Gc,
+    /// Check that this machine can run sandboxes (bubblewrap, user namespaces, D-Bus proxy).
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -311,6 +367,242 @@ fn progress() -> impl FnMut(u64, Option<u64>) {
     }
 }
 
+fn launch_ctx(unsandboxed: bool) -> LaunchCtx {
+    LaunchCtx {
+        elevator: launch::detect_elevator(),
+        session_env: launch::SESSION_ENV
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect(),
+        host: None,
+        unsandboxed,
+    }
+}
+
+fn onoff(b: bool) -> &'static str {
+    if b { "on" } else { "off" }
+}
+
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
+}
+
+fn sandbox_cmd(cmd: SandboxCmd) -> Result<()> {
+    match cmd {
+        SandboxCmd::Check => {
+            let bwrap = on_path("bwrap");
+            println!(
+                "bubblewrap (bwrap):   {}",
+                if bwrap {
+                    "found"
+                } else {
+                    "MISSING - install the 'bubblewrap' package"
+                }
+            );
+            let works = bwrap
+                && Command::new("bwrap")
+                    .args([
+                        "--unshare-all",
+                        "--ro-bind",
+                        "/usr",
+                        "/usr",
+                        "--symlink",
+                        "usr/bin",
+                        "/bin",
+                        "--symlink",
+                        "usr/lib",
+                        "/lib",
+                        "--symlink",
+                        "usr/lib",
+                        "/lib64",
+                        "--proc",
+                        "/proc",
+                        "--dev",
+                        "/dev",
+                        "/bin/true",
+                    ])
+                    .output()
+                    .is_ok_and(|o| o.status.success());
+            println!(
+                "sandboxes start:      {}",
+                if works {
+                    "yes (user namespaces work)"
+                } else {
+                    "NO - bwrap could not create a sandbox (user namespaces disabled?)"
+                }
+            );
+            println!(
+                "xdg-dbus-proxy:       {}",
+                if on_path("xdg-dbus-proxy") {
+                    "found (filtered session bus available)"
+                } else {
+                    "missing (use `--bus off` or `--bus full`)"
+                }
+            );
+            println!(
+                "wayland / x11:        {} / {}",
+                std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "-".into()),
+                std::env::var("DISPLAY").unwrap_or_else(|_| "-".into())
+            );
+        }
+        SandboxCmd::Gc => {
+            let n = library()?.gc_extracted()?;
+            println!(
+                "Removed {n} unpacked cop{}.",
+                if n == 1 { "y" } else { "ies" }
+            );
+        }
+        SandboxCmd::Prepare { id } => {
+            let lib = library()?;
+            if !lib.sandbox_settings(&id)?.enabled() {
+                bail!(
+                    "{id} has no sandbox; turn it on first: appofholding sandbox set {id} --level standard"
+                );
+            }
+            let t = std::time::Instant::now();
+            lib.prepare_launch(&id)?;
+            println!(
+                "{id} is unpacked and ready ({:.1}s).",
+                t.elapsed().as_secs_f32()
+            );
+        }
+        SandboxCmd::Show { id } => {
+            let lib = library()?;
+            let s = lib.sandbox_settings(&id)?;
+            println!("level:    {}", s.level.as_str());
+            if !s.enabled() {
+                println!(
+                    "(the app runs without a sandbox; enable one with `appofholding sandbox set {id} --level standard`)"
+                );
+                return Ok(());
+            }
+            println!("network:  {}", onoff(s.network));
+            println!(
+                "home:     {}",
+                match s.home {
+                    HomeAccess::Private =>
+                        format!("private ({})", lib.dirs.private_home(&id).display()),
+                    HomeAccess::ReadOnly => "your home, read-only".into(),
+                    HomeAccess::ReadWrite => "your home, writable".into(),
+                }
+            );
+            println!("display:  {}", onoff(s.display));
+            println!("gpu:      {}", onoff(s.gpu));
+            println!("audio:    {}", onoff(s.audio));
+            println!("devices:  {}", onoff(s.devices));
+            println!("bus:      {}", s.bus.as_str());
+            println!(
+                "chromium: {}",
+                if s.chromium_workaround {
+                    "--no-sandbox added automatically"
+                } else {
+                    "no workaround"
+                }
+            );
+            if s.paths.is_empty() {
+                println!("shared folders: none");
+            }
+            for g in &s.paths {
+                println!(
+                    "shared:   {} ({})",
+                    g.path.display(),
+                    if g.write { "read-write" } else { "read-only" }
+                );
+            }
+        }
+        SandboxCmd::Set {
+            id,
+            level,
+            network,
+            home,
+            gpu,
+            audio,
+            devices,
+            display,
+            bus,
+            allow,
+            clear_allow,
+            chromium_workaround,
+        } => {
+            let lib = library()?;
+            let mut s = lib.sandbox_settings(&id)?;
+            if let Some(l) = level {
+                let Some(l) = Level::parse(&l) else {
+                    bail!("level must be none, standard or strict")
+                };
+                if l == Level::Custom {
+                    bail!("'custom' is what you get by changing individual options");
+                }
+                s = sandbox::Settings {
+                    paths: s.paths,
+                    ..sandbox::Settings::for_level(l)
+                };
+            } else if !s.enabled() {
+                // Changing options on an app with no sandbox starts from the standard preset.
+                s = sandbox::Settings {
+                    paths: s.paths,
+                    ..sandbox::Settings::for_level(Level::Standard)
+                };
+            }
+            if let Some(v) = network {
+                s.network = v;
+            }
+            if let Some(v) = gpu {
+                s.gpu = v;
+            }
+            if let Some(v) = audio {
+                s.audio = v;
+            }
+            if let Some(v) = devices {
+                s.devices = v;
+            }
+            if let Some(v) = display {
+                s.display = v;
+            }
+            if let Some(v) = chromium_workaround {
+                s.chromium_workaround = v;
+            }
+            if let Some(h) = home {
+                s.home = HomeAccess::parse(&h).context("home must be private, ro or rw")?;
+            }
+            if let Some(b) = bus {
+                s.bus = Bus::parse(&b).context("bus must be off, filtered or full")?;
+            }
+            if clear_allow {
+                s.paths.clear();
+            }
+            for a in allow {
+                let (p, write) = match a.rsplit_once(':') {
+                    Some((p, "rw")) => (p, true),
+                    Some((p, "ro")) => (p, false),
+                    _ => (a.as_str(), false),
+                };
+                let path = PathBuf::from(p);
+                if !s.paths.iter().any(|g| g.path == path) {
+                    s.paths.push(PathGrant { path, write });
+                } else {
+                    s.paths
+                        .iter_mut()
+                        .filter(|g| g.path == path)
+                        .for_each(|g| g.write = write);
+                }
+            }
+            let saved = lib.set_sandbox(&id, &s)?;
+            println!("{id}: sandbox level is now '{}'", saved.level.as_str());
+            if saved.enabled() {
+                if saved.home == HomeAccess::ReadWrite {
+                    println!(
+                        "note: with writable home access the app can change any of your files"
+                    );
+                }
+                println!("Preview the command with: appofholding run --print {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn print_warnings(lib: &Library) {
     for w in lib.take_warnings() {
         eprintln!("warning: {w}");
@@ -399,8 +691,7 @@ fn launch_cmd(cmd: LaunchCmd) -> Result<()> {
             );
             println!("extract & run:  {}", p.extract_and_run);
             println!("elevated:       {}", p.elevated);
-            let session: Vec<(String, String)> = vec![];
-            match lib.plan_launch(&id, Some(name), &[], launch::detect_elevator(), &session) {
+            match lib.plan_launch(&id, Some(name), &[], &launch_ctx(false)) {
                 Ok(plan) => println!("\ncommand:\n  {}", plan.display()),
                 Err(e) => println!("\ncommand: ({e})"),
             }
@@ -816,10 +1107,26 @@ fn main() -> Result<()> {
                 println!("update info: {}", a.update_info.as_deref().unwrap_or("-"));
             }
         }
-        Cmd::Remove { id, keep_file } => {
-            let rec = library()?.remove(&id, keep_file)?;
+        Cmd::Remove {
+            id,
+            keep_file,
+            purge_data,
+        } => {
+            let lib = library()?;
+            let rec = lib.remove(&id, keep_file)?;
             println!("Removed {} ({})", rec.name, rec.id);
+            if purge_data {
+                if lib.purge_private_home(&id)? {
+                    println!("Deleted its private data folder.");
+                }
+            } else if lib.dirs.private_home(&id).is_dir() {
+                println!(
+                    "Its private data folder was kept: {}\n(add --purge-data to delete it)",
+                    lib.dirs.private_home(&id).display()
+                );
+            }
         }
+        Cmd::Sandbox(cmd) => sandbox_cmd(cmd)?,
         Cmd::Source(cmd) => source_cmd(cmd)?,
         Cmd::Check { id } => {
             let lib = library()?;
@@ -958,25 +1265,36 @@ fn main() -> Result<()> {
         Cmd::Run {
             profile,
             print,
+            unsandboxed,
             id,
             args,
         } => {
             let lib = library()?;
-            let session: Vec<(String, String)> = launch::SESSION_ENV
-                .iter()
-                .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
-                .collect();
-            // M5 adds sandboxing here; today the plan is arguments, environment, prefix and cwd.
-            let plan = lib.plan_launch(
-                &id,
-                profile.as_deref(),
-                &args,
-                launch::detect_elevator(),
-                &session,
-            )?;
+            let plan = lib.plan_launch(&id, profile.as_deref(), &args, &launch_ctx(unsandboxed))?;
             if print {
                 println!("{}", plan.display());
+                for n in &plan.notes {
+                    eprintln!("note: {n}");
+                }
                 return Ok(());
+            }
+            // Unpack the app and create its private home on first sandboxed launch.
+            if !unsandboxed {
+                let nothing_to_unpack = !lib.sandbox_settings(&id)?.enabled()
+                    || appofholding_core::extract::is_extracted(&lib.dirs, &lib.get(&id)?.sha256);
+                if !nothing_to_unpack {
+                    eprintln!("Unpacking {} for its first sandboxed launch...", id);
+                }
+                lib.prepare_launch(&id)?;
+            }
+            // Planning again after unpacking lets the sandbox see what kind of app this is.
+            let plan = lib.plan_launch(&id, profile.as_deref(), &args, &launch_ctx(unsandboxed))?;
+            for n in &plan.notes {
+                eprintln!("note: {n}");
+            }
+            if plan.helper.is_some() {
+                // A helper (the filtered D-Bus proxy) has to be supervised, so we cannot exec.
+                std::process::exit(plan.run()?);
             }
             let err = plan.command().exec();
             bail!("failed to launch {}: {err}", plan.argv[0]);

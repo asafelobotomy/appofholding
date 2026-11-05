@@ -1,7 +1,7 @@
 //! Read-only access to an AppImage. Nothing here executes the file: the squashfs payload is
 //! parsed in-process with `backhand`.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
@@ -138,6 +138,55 @@ impl AppImage {
         Err(Error::Squashfs(format!(
             "too many symlinks resolving {path}"
         )))
+    }
+
+    /// Unpack the whole image into `dest` (which must exist). Paths are confined to `dest`,
+    /// setuid/setgid bits are dropped, and device nodes/sockets are skipped.
+    pub fn extract_to(&self, dest: &Path) -> Result<()> {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        for node in self.fs.files() {
+            let rel: PathBuf = node
+                .fullpath
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let target = dest.join(&rel);
+            let mode = (node.header.permissions as u32) & 0o777;
+            match &node.inner {
+                InnerNode::Dir(_) => {
+                    fs::create_dir_all(&target).map_err(Error::io(&target))?;
+                    // Keep owner access so extraction (and later cleanup) always works.
+                    fs::set_permissions(&target, fs::Permissions::from_mode(mode | 0o700))
+                        .map_err(Error::io(&target))?;
+                }
+                InnerNode::File(f) => {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent).map_err(Error::io(parent))?;
+                    }
+                    let mut out = File::create(&target).map_err(Error::io(&target))?;
+                    std::io::copy(&mut self.fs.file(f).reader(), &mut out)
+                        .map_err(|e| Error::Squashfs(format!("{}: {e}", rel.display())))?;
+                    drop(out);
+                    fs::set_permissions(&target, fs::Permissions::from_mode(mode | 0o400))
+                        .map_err(Error::io(&target))?;
+                }
+                InnerNode::Symlink(s) => {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent).map_err(Error::io(parent))?;
+                    }
+                    let _ = fs::remove_file(&target);
+                    symlink(&s.link, &target).map_err(Error::io(&target))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub fn exists(&self, path: &str) -> bool {

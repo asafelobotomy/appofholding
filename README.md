@@ -3,7 +3,10 @@
 appOFholding is an AppImage launcher/manager (a Gear Lever alternative): desktop integration, update-source
 tracking, auto-update, sandboxing and launch flags. See the project plan for the roadmap.
 
-Status: **Milestone 4 (launch model)**. M4: per-app launch profiles (args, env, prefix, working dir,
+Status: **Milestone 5 (sandbox)**. M5: optional bubblewrap sandbox per app (levels none / standard / strict,
+network, home, GPU, audio, devices, display, filtered session bus, shared folders), runs from an unpacked
+copy so no FUSE is needed, private persistent home. Tested against Electron, Qt and GTK/Tauri AppImages.
+M4 (launch model): M4: per-app launch profiles (args, env, prefix, working dir,
 extract-and-run, opt-in elevation, built-in presets like electron-wayland / x11 / no-sandbox), extra profiles
 in the right-click menu, a live command preview, and install/update hooks. M3 (update engine): M3: resumable verified downloads, atomic updates with rollback, per-app
 update policy (auto / notify / manual / pinned), skip-version, running-app handling, ETag caching and a
@@ -21,6 +24,10 @@ appofholding policy <id> auto|notify|manual|pinned | skip <id> [--clear]
 appofholding run [--profile P] [--print] <id> [args...]
 appofholding launch presets | show <id> | set <id> [--profile P] [--preset X] [--env K=V] [--args '..'] [--prefix '..'] ...
 appofholding launch hook set|show|clear|run <id> post-install|pre-update|post-update
+appofholding sandbox check | show <id> | set <id> --level none|standard|strict [--network false] [--home private|ro|rw]
+                     [--bus off|filtered|full] [--allow PATH[:rw]] | prepare <id> | gc
+appofholding run [--unsandboxed] ...       # --print shows the full bwrap command
+appofholding remove <id> [--purge-data]    # a sandboxed app's private home is kept unless you purge it
 appofholding schedule install [--interval hourly|daily|weekly] | remove | status
 appofholding list
 appofholding info <file|id>

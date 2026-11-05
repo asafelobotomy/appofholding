@@ -9,6 +9,7 @@ pub mod download;
 mod elf;
 pub mod engine;
 pub mod error;
+pub mod extract;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixture;
 pub mod http;
@@ -21,6 +22,7 @@ pub mod paths;
 pub mod profiles;
 pub mod providers;
 pub mod running;
+pub mod sandbox;
 pub mod schedule;
 pub mod source;
 pub mod updates;

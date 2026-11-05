@@ -11,6 +11,8 @@ pub struct Dirs {
     pub data_home: PathBuf,
     /// `$XDG_CONFIG_HOME` (default `~/.config`).
     pub config_home: PathBuf,
+    /// `$XDG_CACHE_HOME` (default `~/.cache`): extracted AppImages for sandboxed launches.
+    pub cache_home: PathBuf,
     /// Where AppImages are stored (default `~/Applications`).
     pub library_dir: PathBuf,
     /// Run `update-desktop-database` after changes (off in tests).
@@ -32,7 +34,12 @@ impl Dirs {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .unwrap_or_else(|| home.join(".config"));
+        let cache_home = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".cache"));
         Ok(Self {
+            cache_home,
             config_home,
             data_home,
             library_dir: home.join("Applications"),
@@ -43,11 +50,22 @@ impl Dirs {
     /// Everything under `root`; nothing touches the real home directory.
     pub fn with_root(root: &Path) -> Self {
         Self {
+            cache_home: root.join("cache"),
             config_home: root.join("config"),
             data_home: root.join("data"),
             library_dir: root.join("Applications"),
             refresh_caches: false,
         }
+    }
+
+    /// Where AppImages are unpacked for sandboxed launches, one directory per SHA-256.
+    pub fn extract_dir(&self) -> PathBuf {
+        self.cache_home.join("appofholding/extracted")
+    }
+
+    /// Persistent, private per-app home directory used by sandboxed launches.
+    pub fn private_home(&self, id: &str) -> PathBuf {
+        self.app_data_dir().join("apps").join(id).join("home")
     }
 
     pub fn systemd_user_dir(&self) -> PathBuf {

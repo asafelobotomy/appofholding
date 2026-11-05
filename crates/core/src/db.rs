@@ -75,6 +75,11 @@ const MIGRATIONS: &[&str] = &[
         command TEXT NOT NULL,
         PRIMARY KEY (app_id, kind)
      );",
+    // v5: sandbox settings (JSON; absent = sandbox off)
+    "CREATE TABLE sandbox (
+        app_id   TEXT PRIMARY KEY REFERENCES apps(id) ON DELETE CASCADE,
+        settings TEXT NOT NULL
+     );",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,6 +446,31 @@ impl Db {
         )? > 0)
     }
 
+    pub fn get_sandbox(&self, app_id: &str) -> Result<Option<crate::sandbox::Settings>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT settings FROM sandbox WHERE app_id = ?1",
+                [app_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        json.map(|j| {
+            serde_json::from_str(&j)
+                .map_err(|e| Error::Other(format!("corrupt sandbox settings for {app_id}: {e}")))
+        })
+        .transpose()
+    }
+
+    pub fn put_sandbox(&self, app_id: &str, s: &crate::sandbox::Settings) -> Result<()> {
+        let json = serde_json::to_string(s).map_err(|e| Error::Other(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO sandbox (app_id, settings) VALUES (?1, ?2) ON CONFLICT(app_id) DO UPDATE SET settings = ?2",
+            params![app_id, json],
+        )?;
+        Ok(())
+    }
+
     pub fn set_hook(&self, app_id: &str, kind: &str, command: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO hooks (app_id,kind,command) VALUES (?1,?2,?3)
@@ -767,6 +797,30 @@ mod tests {
         assert!(
             db.list_profiles("a").unwrap().is_empty() && db.list_hooks("a").unwrap().is_empty()
         );
+    }
+
+    #[test]
+    fn sandbox_settings_roundtrip() {
+        use crate::sandbox::{Bus, HomeAccess, Level, PathGrant, Settings};
+        let db = Db::open_in_memory().unwrap();
+        db.insert(&rec("a", "/x/a")).unwrap();
+        assert!(db.get_sandbox("a").unwrap().is_none());
+        let s = Settings {
+            home: HomeAccess::ReadOnly,
+            bus: Bus::Full,
+            paths: vec![PathGrant {
+                path: "/srv/x".into(),
+                write: true,
+            }],
+            ..Settings::for_level(Level::Standard)
+        }
+        .normalized();
+        db.put_sandbox("a", &s).unwrap();
+        db.put_sandbox("a", &s).unwrap();
+        assert_eq!(db.get_sandbox("a").unwrap().unwrap(), s);
+        assert_eq!(s.level, Level::Custom);
+        db.delete("a").unwrap();
+        assert!(db.get_sandbox("a").unwrap().is_none());
     }
 
     #[test]

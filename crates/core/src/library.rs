@@ -207,6 +207,17 @@ impl Library {
         self.db.list()
     }
 
+    /// Delete an app's private sandbox home (its settings, logins, downloads...). Never done
+    /// implicitly by `remove`, because it cannot be undone.
+    pub fn purge_private_home(&self, id: &str) -> Result<bool> {
+        let home = self.dirs.private_home(id);
+        match fs::remove_dir_all(&home) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(Error::io(&home)(e)),
+        }
+    }
+
     pub fn get(&self, id: &str) -> Result<AppRecord> {
         self.db
             .get(id)?
@@ -386,6 +397,7 @@ impl Library {
             }
         }
         self.db.delete(id)?;
+        let _ = self.gc_extracted(); // its unpacked copies are no longer needed
         self.refresh_caches();
         Ok(rec)
     }
