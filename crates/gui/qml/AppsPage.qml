@@ -25,6 +25,29 @@ ThemedPage {
         return out
     }
 
+    // How the apps are laid out: "list", "grid" or "compact". Saved, and applied at once.
+    property string viewMode: applicationWindow().backendObject.view()
+    function setViewMode(mode) {
+        viewMode = mode
+        var err = applicationWindow().backendObject.setView(mode)
+        if (err) applicationWindow().showPassiveNotification(err)
+    }
+
+    // The grid is a list of lines, each holding as many tiles as fit, so section headers,
+    // scrolling and recycling all keep working.
+    readonly property real gridMin: Kirigami.Units.gridUnit * 12
+    readonly property int columns: Math.max(1, Math.floor((list.width - list.leftMargin - list.rightMargin + list.spacing) / (gridMin + list.spacing)))
+    readonly property var lines: {
+        var out = []
+        var n = columns
+        for (var i = 0; i < rows.length; i++) {
+            var last = out.length ? out[out.length - 1] : null
+            if (last && last.group === rows[i].group && last.items.length < n) last.items.push(rows[i])
+            else out.push({group: rows[i].group, items: [rows[i]]})
+        }
+        return out
+    }
+
     actions: [
         Kirigami.Action {
             text: qsTr("Add app")
@@ -107,20 +130,47 @@ ThemedPage {
             ]
         }
 
-        Kirigami.SearchField {
-            id: search
-            visible: page.allApps.length > 4
-            placeholderText: qsTr("Search apps")
+        RowLayout {
             Layout.fillWidth: true
             Layout.margins: Kirigami.Units.smallSpacing
-            onTextChanged: page.query = text
+            visible: page.allApps.length > 0
+            spacing: Kirigami.Units.smallSpacing
+
+            Kirigami.SearchField {
+                id: search
+                visible: page.allApps.length > 4
+                placeholderText: qsTr("Search apps")
+                Layout.fillWidth: true
+                onTextChanged: page.query = text
+            }
+            Item { Layout.fillWidth: true; visible: !search.visible }
+
+            QQC2.ButtonGroup { id: viewGroup }
+            Repeater {
+                model: [
+                    {mode: "grid", icon: "view-list-icons", label: qsTr("Grid")},
+                    {mode: "list", icon: "view-list-details", label: qsTr("List")},
+                    {mode: "compact", icon: "view-list-text", label: qsTr("List (Compact)")}
+                ]
+                QQC2.ToolButton {
+                    required property var modelData
+                    icon.name: modelData.icon
+                    checkable: true
+                    checked: page.viewMode === modelData.mode
+                    QQC2.ButtonGroup.group: viewGroup
+                    Accessible.name: modelData.label
+                    QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.text: modelData.label
+                    onClicked: page.setViewMode(modelData.mode)
+                }
+            }
         }
     }
 
     ListView {
         id: list
-        model: page.rows
-        spacing: Kirigami.Units.smallSpacing
+        model: page.viewMode === "grid" ? page.lines : page.rows
+        spacing: page.viewMode === "compact" ? 2 : Kirigami.Units.smallSpacing
         topMargin: Kirigami.Units.smallSpacing
         bottomMargin: Kirigami.Units.largeSpacing
         leftMargin: Kirigami.Units.smallSpacing
@@ -134,7 +184,35 @@ ThemedPage {
             width: ListView.view ? ListView.view.width : implicitWidth
             label: section
         }
-        delegate: AppCard {}
+        delegate: page.viewMode === "grid" ? gridLine : page.viewMode === "compact" ? compactRow : listCard
+
+        Component { id: listCard; AppCard {} }
+        Component { id: compactRow; AppRow {} }
+        Component {
+            id: gridLine
+            Item {
+                id: line
+                required property var modelData
+                readonly property real cell: (width - (page.columns - 1) * list.spacing) / page.columns
+                width: list.width - list.leftMargin - list.rightMargin
+                implicitHeight: tiles.height
+                height: tiles.height
+                Row {
+                    id: tiles
+                    spacing: list.spacing
+                    Repeater {
+                        model: line.modelData.items
+                        AppGridCard {
+                            required property var modelData
+                            app: modelData
+                            width: line.cell
+                            // Tiles in a line share the tallest height so the edges align.
+                            height: Math.max(implicitHeight, Kirigami.Units.gridUnit * 10)
+                        }
+                    }
+                }
+            }
+        }
 
         add: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: Kirigami.Units.longDuration } }
         displaced: Transition { NumberAnimation { properties: "y"; duration: Kirigami.Units.longDuration; easing.type: Easing.OutCubic } }

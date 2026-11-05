@@ -344,6 +344,31 @@ pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
     std::fs::write(f, format!("{name}\n")).map_err(e)
 }
 
+/// How the library lists apps; the first is the default.
+pub const VIEWS: [&str; 3] = ["list", "grid", "compact"];
+
+fn view_file(dirs: &Dirs) -> std::path::PathBuf {
+    dirs.config_home.join("appofholding").join("gui-view")
+}
+
+/// The saved library layout; anything missing or unrecognised means "list".
+pub fn view_load(dirs: &Dirs) -> String {
+    std::fs::read_to_string(view_file(dirs))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| VIEWS.contains(&t.as_str()))
+        .unwrap_or_else(|| VIEWS[0].to_string())
+}
+
+pub fn view_save(dirs: &Dirs, name: &str) -> Res<()> {
+    if !VIEWS.contains(&name) {
+        return Err(format!("unknown view '{name}'"));
+    }
+    let f = view_file(dirs);
+    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
+    std::fs::write(f, format!("{name}\n")).map_err(e)
+}
+
 pub fn schedule_status(dirs: &Dirs) -> Value {
     let (svc, timer) = schedule::unit_paths(dirs);
     json!({ "installed": svc.exists() && timer.exists() })
@@ -718,6 +743,20 @@ mod tests {
         assert!(theme_save(&dirs, "../evil").is_err());
         std::fs::write(theme_file(&dirs), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
+    }
+
+    #[test]
+    fn the_library_view_is_saved_and_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::with_root(tmp.path());
+        assert_eq!(view_load(&dirs), "list");
+        view_save(&dirs, "grid").unwrap();
+        assert_eq!(view_load(&dirs), "grid");
+        view_save(&dirs, "compact").unwrap();
+        assert_eq!(view_load(&dirs), "compact");
+        assert!(view_save(&dirs, "../evil").is_err());
+        std::fs::write(view_file(&dirs), "garbage").unwrap();
+        assert_eq!(view_load(&dirs), "list");
     }
 
     fn add_foo(tmp: &Path, lib: &Library) {

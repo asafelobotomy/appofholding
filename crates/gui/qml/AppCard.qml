@@ -161,24 +161,6 @@ Rectangle {
                 if (err) applicationWindow().showPassiveNotification(err)
             }
         }
-        QQC2.ToolButton {
-            icon.name: "overflow-menu"
-            Accessible.name: qsTr("More actions for %1").arg(card.app.name)
-            onClicked: menu.popup()
-            QQC2.Menu {
-                id: menu
-                QQC2.MenuItem {
-                    text: qsTr("Details")
-                    icon.name: "configure"
-                    onTriggered: applicationWindow().openApp(card.app.id)
-                }
-                QQC2.MenuItem {
-                    text: qsTr("Check for updates")
-                    icon.name: "view-refresh"
-                    enabled: card.app.hasSource && !card.busy
-                    onTriggered: applicationWindow().backendObject.start("check", card.app.id, "", "", "")
-                }
-            }
-        }
+        AppMenuButton { app: card.app; busy: card.busy }
     }
 }

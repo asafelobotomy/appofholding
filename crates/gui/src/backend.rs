@@ -93,6 +93,12 @@ pub mod qobject {
         #[cxx_name = "setTheme"]
         #[qinvokable]
         fn set_theme(self: &Backend, name: &QString) -> QString;
+        /// The saved library layout: list, grid or compact.
+        #[qinvokable]
+        fn view(self: &Backend) -> QString;
+        #[cxx_name = "setView"]
+        #[qinvokable]
+        fn set_view(self: &Backend, name: &QString) -> QString;
         #[cxx_name = "importRestore"]
         #[qinvokable]
         fn import_restore(self: &Backend) -> QString;
@@ -293,6 +299,18 @@ impl qobject::Backend {
             appofholding_core::Dirs::detect()
                 .map_err(|e| e.to_string())
                 .and_then(|d| service::theme_save(&d, &s(name))),
+        )
+    }
+    pub fn view(&self) -> QString {
+        q(&appofholding_core::Dirs::detect()
+            .map(|d| service::view_load(&d))
+            .unwrap_or_else(|_| "list".into()))
+    }
+    pub fn set_view(&self, name: &QString) -> QString {
+        unit(
+            appofholding_core::Dirs::detect()
+                .map_err(|e| e.to_string())
+                .and_then(|d| service::view_save(&d, &s(name))),
         )
     }
     pub fn import_restore(&self) -> QString {

@@ -11,6 +11,8 @@
 
 - Redesigned interface: grouped app list with status at a glance, app tiles, a tabbed detail page
   (Overview, Updates, Launch, Sandbox) built from cards, and a narrow-window layout.
+- Library views: switch between Grid, List and List (Compact) with the buttons above the app
+  list; the choice is remembered.
 - Colour themes: Gruvbox light and dark, chosen in Settings > Appearance (applies on the next
   start). "Follow the system" stays the default.
 - Import dialog: a clear "nothing to import" state, select all / none, plural-correct wording and

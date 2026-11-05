@@ -21,6 +21,9 @@ fn main() {
                     "qml/Pill.qml",
                     "qml/PrimaryButton.qml",
                     "qml/AppTile.qml",
+                    "qml/AppRow.qml",
+                    "qml/AppGridCard.qml",
+                    "qml/AppMenuButton.qml",
                     "qml/SectionCard.qml",
                     "qml/ThemedPage.qml",
                 ]

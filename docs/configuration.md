@@ -56,8 +56,10 @@ The package manager's own files are never overwritten by appOFholding.
 
 ## Interface settings
 
-The only setting the graphical app keeps for itself is the colour theme: the file
-`gui-theme` in the appOFholding config folder (`~/.config/appofholding/gui-theme`) holds
-`system`, `gruvbox-dark` or `gruvbox-light`. Change it under Settings > Appearance; it applies the
-next time the app starts. Deleting the file goes back to following the desktop. It is not part of
-`export` / `apply`, because it belongs to the machine rather than to the library.
+The graphical app keeps two settings of its own. The library layout is the file `gui-view` in the
+same folder (`list`, `grid` or `compact`); it is saved as soon as you pick a layout. The colour
+theme is `gui-theme` (`system`, `gruvbox-dark` or `gruvbox-light`); change it under
+Settings > Appearance and it applies the next time the app starts. Both live in
+`~/.config/appofholding/`. Deleting a file goes back to its default (the desktop colours, the list
+layout). Neither is part of `export` / `apply`, because they belong to the machine rather than to
+the library.
