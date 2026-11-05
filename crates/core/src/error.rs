@@ -26,6 +26,14 @@ pub enum Error {
     AlreadyAdded(String),
     #[error("no app with id '{0}' in the library")]
     NotFound(String),
+    #[error("network error: {0}")]
+    Http(String),
+    #[error("{0}")]
+    Source(String),
+    #[error("GitHub API rate limit reached{}; set GITHUB_TOKEN to raise the limit", .0.as_deref().map(|r| format!(" (resets {r})")).unwrap_or_default())]
+    RateLimited(Option<String>),
+    #[error("checksum mismatch: expected {expected}, got {actual}")]
+    Checksum { expected: String, actual: String },
     #[error("{0}")]
     Other(String),
 }

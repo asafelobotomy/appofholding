@@ -161,6 +161,22 @@ fn normalize(p: &Path) -> PathBuf {
     out
 }
 
+/// SHA-1 of a file on disk (zsync control files identify builds by SHA-1).
+pub fn sha1_file(path: &Path) -> Result<String> {
+    use sha1::Sha1;
+    let mut f = File::open(path).map_err(Error::io(path))?;
+    let mut h = Sha1::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(Error::io(path))?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(hex::encode(h.finalize()))
+}
+
 /// SHA-256 and size of a file on disk.
 pub fn hash_file(path: &Path) -> Result<(String, u64)> {
     let mut f = File::open(path).map_err(Error::io(path))?;

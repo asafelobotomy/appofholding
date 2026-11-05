@@ -163,7 +163,7 @@ pub struct Library {
     pub dirs: Dirs,
     /// Absolute path to the `appimgr` binary written into `Exec=` lines.
     pub exec_bin: PathBuf,
-    db: Db,
+    pub(crate) db: Db,
 }
 
 impl Library {
@@ -232,6 +232,11 @@ impl Library {
         } else {
             self.refresh_caches();
         }
+        // Remember where the AppImage says it wants to be updated from.
+        if let Ok(rec) = &result
+            && let Some(Ok(p)) = rec.update_info.as_deref().map(crate::source::parse_input) {
+                let _ = self.db.upsert_source(&rec.id, &p.source);
+            }
         result
     }
 

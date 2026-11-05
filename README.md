@@ -3,11 +3,14 @@
 An AppImage launcher/manager (a Gear Lever alternative): desktop integration, update-source
 tracking, auto-update, sandboxing and launch flags. See the project plan for the roadmap.
 
-Status: **Milestone 1 (foundation)** — read AppImages without executing them, integrate them into
-the desktop menu, track them in a SQLite library, remove them cleanly.
+Status: **Milestone 2 (sources)**. M1: read AppImages without executing them, integrate them into
+the desktop menu, track them in a SQLite library. M2: update sources (GitHub, GitLab, Forgejo/Gitea,
+zsync, plain URLs), install straight from a pasted link, update checks with explicit statuses.
 
 ```
-appimgr add <file> [--move] [--id ID]
+appimgr add <file|link> [--asset PATTERN] [--channel latest|latest-pre|latest-all|TAG] [--move] [--id ID]
+appimgr source show|set|clear|test ...   # `test` previews the release and which file would be chosen
+appimgr check [id]
 appimgr list
 appimgr info <file|id>
 appimgr remove <id> [--keep-file]
