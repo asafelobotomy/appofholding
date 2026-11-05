@@ -5,7 +5,7 @@ Version:        0.2.0
 Release:        1%{?dist}
 Summary:        AppImage manager with updates, launch options and sandboxing
 License:        GPL-3.0-or-later
-URL:            https://example.invalid/appofholding
+URL:            https://github.com/asafelobotomy/appofholding
 
 BuildRequires:  cargo
 BuildRequires:  gcc-c++
@@ -45,8 +45,8 @@ make install PREFIX=%{_prefix} DESTDIR=%{buildroot} PROFILE=release
 %{_datadir}/licenses/appofholding/
 
 %changelog
-* Thu Nov 05 2026 appOFholding maintainers <appofholding@example.invalid> - 0.2.0-1
+* Thu Nov 05 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.2.0-1
 - Self-updater, new icon
 
-* Thu Nov 05 2026 appOFholding maintainers <appofholding@example.invalid> - 0.1.0-1
+* Thu Nov 05 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.1.0-1
 - First release

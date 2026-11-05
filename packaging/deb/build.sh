@@ -20,7 +20,7 @@ cat > "$stage/DEBIAN/control" <<CONTROL
 Package: appofholding
 Version: $version
 Architecture: $arch
-Maintainer: appOFholding maintainers <appofholding@example.invalid>
+Maintainer: asafelobotomy <213836723+asafelobotomy@users.noreply.github.com>
 Installed-Size: $size
 Depends: libc6, libstdc++6, bubblewrap, xdg-dbus-proxy, qml6-module-org-kde-kirigami, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-dialogs, qml6-module-qtquick-window, qml6-module-org-kde-desktop
 Recommends: zsync, libnotify-bin

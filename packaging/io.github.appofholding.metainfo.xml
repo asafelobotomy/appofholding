@@ -19,6 +19,8 @@
       <li>A command line tool and a configuration file for repeatable setups</li>
     </ul>
   </description>
+  <url type="homepage">https://github.com/asafelobotomy/appofholding</url>
+  <url type="bugtracker">https://github.com/asafelobotomy/appofholding/issues</url>
   <launchable type="desktop-id">io.github.appofholding.desktop</launchable>
   <provides>
     <binary>appofholding</binary>

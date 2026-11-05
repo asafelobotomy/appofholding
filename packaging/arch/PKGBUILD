@@ -1,16 +1,16 @@
-# Maintainer: <your name> <you@example.com>
+# Maintainer: asafelobotomy <213836723+asafelobotomy@users.noreply.github.com>
 #
 # Builds from the repository checkout this file lives in (packaging/arch/ inside the source tree):
 #     cd packaging/arch && makepkg -si
 # For the AUR, replace the local build with a release tarball:
-#     source=("$pkgname-$pkgver.tar.gz::<release URL>")  and  cd "$pkgname-$pkgver"  in each function.
+#     source=("$pkgname-$pkgver.tar.gz::https://github.com/asafelobotomy/appofholding/archive/refs/tags/v$pkgver.tar.gz")  and  cd "$pkgname-$pkgver"  in each function.
 
 pkgname=appofholding
 pkgver=0.2.0
 pkgrel=1
 pkgdesc='AppImage manager: menu integration, updates, launch options and sandboxing'
 arch=(x86_64 aarch64)
-url='https://example.invalid/appofholding'
+url='https://github.com/asafelobotomy/appofholding'
 license=(GPL-3.0-or-later)
 depends=(gcc-libs glibc bubblewrap xdg-dbus-proxy qt6-base qt6-declarative qt6-svg kirigami
          qqc2-desktop-style hicolor-icon-theme)
