@@ -5,7 +5,7 @@
 ### Fixed
 - The 0.4.0 package was built against Qt 6.12 and crashed at start on systems with an older Qt
   (Manjaro: "undefined symbol ... Qt_6_PRIVATE_API"). The interface's QML is now compiled to
-  bytecode only, which uses no private Qt API, so one package works across Qt versions. CI and
+  bytecode only, without Qt 6.12's lookup validation, so it uses no private Qt API, so one package works across Qt versions. CI and
   the release workflow refuse a build that uses private Qt symbols again.
 
 ## 0.4.0

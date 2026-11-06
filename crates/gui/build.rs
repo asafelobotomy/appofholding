@@ -12,6 +12,9 @@ use cxx_qt_build::{CxxQtBuilder, QmlFile, QmlModule};
 /// and if its format ever does not match the installed Qt, Qt compiles the embedded QML source
 /// instead, so the binary keeps working across Qt updates.
 ///
+/// Qt 6.12 adds a second private call, a check of those AOT lookups, to every generated file;
+/// `--no-aot-validation` turns that off where it exists.
+///
 /// cxx-qt-build has no switch for this, but it finds qmlcachegen through `qmake -query`, and
 /// honours `$QMAKE`. So this points `$QMAKE` at a small wrapper whose tool directory holds the
 /// real Qt tools, except for a qmlcachegen that adds `--only-bytecode`.
@@ -65,9 +68,21 @@ fn bytecode_only_qmlcachegen() {
             .expect("make a wrapper executable");
     };
     let q = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
+    // Qt 6.12 also writes a lookup check that calls private API even for bytecode-only output,
+    // unless told not to; older versions have no such option and would reject it.
+    let help = Command::new(&real_cachegen)
+        .arg("--help")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let extra = if help.contains("--no-aot-validation") {
+        " --no-aot-validation"
+    } else {
+        ""
+    };
     script(
         &tools.join("qmlcachegen"),
-        format!("exec {} --only-bytecode \"$@\"", q(&real_cachegen)),
+        format!("exec {} --only-bytecode{extra} \"$@\"", q(&real_cachegen)),
     );
     let wrapper = out.join("qmake");
     script(
