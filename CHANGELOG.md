@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2
+
+- Update appOFholding itself from its own window. When a new release is out, **Update now** (in
+  the banner, or in Settings) says what will happen, downloads the release and checks it against
+  its published SHA-256, then installs it: pacman packages through `run0 pacman -U` (your desktop
+  asks for the password), AppImages in place. Afterwards it offers to restart into the new
+  version. Before, a pacman install had to be updated from a terminal.
+
+### Fixed
+- Package files from earlier self-updates no longer pile up in `~/.cache/appofholding/self`; the
+  command line also removes a package once it is installed.
+- Dismissing the password dialog is reported as such, not as run0's "Access denied".
+
 ## 0.4.1
 
 ### Fixed

@@ -626,6 +626,7 @@ fn self_cmd(cmd: SelfCmd) -> Result<()> {
                         if !ok {
                             bail!("the package manager did not finish; you can retry with: {line}");
                         }
+                        let _ = std::fs::remove_file(&file);
                         println!("Installed {to}. Restart any open appOFholding windows.");
                     } else {
                         println!("Install it with:\n  {line}\n(or re-run with --install)");

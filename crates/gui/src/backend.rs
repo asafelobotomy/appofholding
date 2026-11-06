@@ -99,6 +99,10 @@ pub mod qobject {
         #[cxx_name = "setView"]
         #[qinvokable]
         fn set_view(self: &Backend, name: &QString) -> QString;
+        /// Start a fresh copy of the program (after an update); "" or the error. The caller
+        /// then quits this one.
+        #[qinvokable]
+        fn relaunch(self: &Backend) -> QString;
         #[cxx_name = "importRestore"]
         #[qinvokable]
         fn import_restore(self: &Backend) -> QString;
@@ -313,6 +317,32 @@ impl qobject::Backend {
                 .and_then(|d| service::view_save(&d, &s(name))),
         )
     }
+    pub fn relaunch(&self) -> QString {
+        // Running as an AppImage: start the AppImage file itself (which now holds the new
+        // version); this binary lives in its temporary mount, which goes away when we quit.
+        if let Some(image) = std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
+            return unit(
+                std::process::Command::new(image)
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|e| format!("could not start the new version: {e}")),
+            );
+        }
+        // After a package update the running file was replaced: /proc/self/exe then reads
+        // "<path> (deleted)", and the path itself holds the new version.
+        let exe = std::fs::read_link("/proc/self/exe")
+            .or_else(|_| std::env::current_exe())
+            .map(|p| {
+                let s = p.to_string_lossy();
+                std::path::PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(&s).to_string())
+            });
+        unit(exe.map_err(|e| e.to_string()).and_then(|exe| {
+            std::process::Command::new(exe)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("could not start the new version: {e}"))
+        }))
+    }
     pub fn import_restore(&self) -> QString {
         json_or_err(with_lib(service::import_restore))
     }
@@ -450,6 +480,7 @@ fn run_task(
         "selfUpdate" => service::self_update(
             &http,
             appofholding_core::selfupdate::detect_current(),
+            &service::run_privileged,
             progress,
         ),
         "prepare" => with_lib(|l| {

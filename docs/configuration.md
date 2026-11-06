@@ -54,8 +54,8 @@ depends on how you installed it:
 
 | Install | What happens |
 |---|---|
-| pacman package | downloads the release's `.pkg.tar.zst`, verifies its SHA-256, and shows `run0 pacman -U <file>`; add `--install` to run it |
-| AppImage | downloads and verifies the new AppImage and replaces the running file, keeping `*.AppImage.previous` |
+| pacman package | downloads the release's `.pkg.tar.zst`, verifies its SHA-256, and shows `run0 pacman -U <file>`; add `--install` to run it. **Update now** in the window does all of this, asking for your password through the desktop |
+| AppImage | downloads and verifies the new AppImage and replaces the running file, keeping `*.AppImage.previous` (from the window too) |
 | `make install PREFIX=~/.local` or unknown | changes nothing and tells you where to get the release |
 
 The package manager's own files are never overwritten by appOFholding.

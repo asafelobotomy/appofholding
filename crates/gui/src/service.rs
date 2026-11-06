@@ -614,7 +614,9 @@ fn self_json(s: &appofholding_core::selfupdate::SelfStatus) -> Value {
         "install": s.install.label(),
         "url": s.release_url,
         "fromCache": s.from_cache,
-        // What to tell the user when the update cannot be done from inside the window.
+        // Pacman packages and AppImages are updated from inside the window.
+        "canInstall": matches!(s.install, InstallKind::Pacman { .. } | InstallKind::AppImage { .. }),
+        // For everything else: what to tell the user.
         "command": match s.install {
             InstallKind::Pacman { .. } => "appofholding self update --install",
             _ => "",
@@ -640,11 +642,38 @@ pub fn self_check(
     Ok(self_json(&s))
 }
 
-/// Update appOFholding itself where it can be done without a password prompt (AppImage
-/// installs); other installs get the command to run.
+/// Runs a privileged command and waits for it; `Err` carries what went wrong, in words.
+pub type Runner<'a> = dyn Fn(&[String]) -> Result<(), String> + 'a;
+
+/// Run `command` (it starts with `run0`, which asks for the password in a desktop dialog).
+pub fn run_privileged(command: &[String]) -> Result<(), String> {
+    let out = Command::new(&command[0])
+        .args(&command[1..])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|err| format!("could not start {}: {err}", command[0]))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    let last = text
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .unwrap_or("it stopped with an error")
+        .to_string();
+    Err(last)
+}
+
+/// Update appOFholding itself. An AppImage is replaced in place; a pacman install downloads and
+/// verifies the release package, then installs it with `run0 pacman -U` (the desktop asks for
+/// the password; the user already confirmed in the window, so pacman's own prompt is skipped).
+/// Other installs get instructions.
 pub fn self_update(
     http: &dyn appofholding_core::http::Http,
     install: appofholding_core::selfupdate::InstallKind,
+    run: &Runner<'_>,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Res<Value> {
     use appofholding_core::selfupdate::{self, Applied};
@@ -656,8 +685,26 @@ pub fn self_update(
         match selfupdate::apply(http, &status, &work, progress).map_err(e)? {
             Applied::AlreadyCurrent => json!({"result": "current"}),
             Applied::Replaced { to, .. } => json!({"result": "replaced", "to": to}),
-            Applied::PackageReady { to, command, .. } => {
-                json!({"result": "package", "to": to, "command": command.join(" ")})
+            Applied::PackageReady { to, command, file } => {
+                // `run0 pacman -U <file>` -> also answer pacman's "Proceed?" for the user.
+                let mut command = command;
+                command.insert(command.len() - 1, "--noconfirm".into());
+                run(&command).map_err(|why| {
+                    // Dismissing the password dialog makes run0 say "Access denied" or that
+                    // authentication is required; say what actually happened.
+                    let lower = why.to_lowercase();
+                    let why = if lower.contains("access denied")
+                        || lower.contains("authentication")
+                        || lower.contains("not authorized")
+                    {
+                        "the password was not given".to_string()
+                    } else {
+                        why
+                    };
+                    format!("appOFholding {to} was not installed: {why}. Nothing was changed.")
+                })?;
+                let _ = std::fs::remove_file(&file);
+                json!({"result": "installed", "to": to})
             }
             Applied::Manual { to, instructions } => {
                 json!({"result": "manual", "to": to, "instructions": instructions})
@@ -778,6 +825,65 @@ mod tests {
         assert!(theme_save(&dirs, "../evil").is_err());
         std::fs::write(theme_file(&dirs), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
+    }
+
+    /// Serialises the tests that point `APPOFHOLDING_ROOT` somewhere (it is process-wide).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn a_pacman_install_updates_from_the_window_through_run0() {
+        use appofholding_core::selfupdate::InstallKind;
+        use sha2::{Digest, Sha256};
+        let pkg = b"fake package".to_vec();
+        let api = "https://api.github.com/repos/asafelobotomy/appofholding/releases/latest";
+        let release = format!(
+            r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[
+              {{"name":"appofholding-99.0.0-1-x86_64.pkg.tar.zst","browser_download_url":"https://dl/pkg","size":{},"digest":"sha256:{}"}}]}}"#,
+            pkg.len(),
+            hex::encode(Sha256::digest(&pkg))
+        );
+        let http = FakeHttp::default()
+            .json(api, &release)
+            .bytes("https://dl/pkg", pkg);
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: tests that set this variable hold ENV_LOCK.
+        unsafe { std::env::set_var("APPOFHOLDING_ROOT", tmp.path()) };
+        let pacman = || InstallKind::Pacman {
+            package: "appofholding".into(),
+        };
+
+        let seen = std::cell::RefCell::new(Vec::new());
+        let ok = |c: &[String]| -> Result<(), String> {
+            seen.borrow_mut().push(c.to_vec());
+            Ok(())
+        };
+        let r = self_update(&http, pacman(), &ok, &mut |_, _| {}).unwrap();
+        assert_eq!(
+            (r["result"].clone(), r["to"].clone()),
+            (json!("installed"), json!("99.0.0"))
+        );
+        let cmd = &seen.borrow()[0];
+        assert_eq!(&cmd[..4], ["run0", "pacman", "-U", "--noconfirm"]);
+        assert!(
+            cmd[4].ends_with("appofholding-99.0.0-1-x86_64.pkg.tar.zst"),
+            "{cmd:?}"
+        );
+
+        // Cancelling the password dialog (or any pacman error) is reported, not hidden.
+        let refused = |_: &[String]| -> Result<(), String> {
+            Err("Failed to start transient service unit: Access denied".into())
+        };
+        let err = self_update(&http, pacman(), &refused, &mut |_, _| {}).unwrap_err();
+        assert_eq!(
+            err,
+            "appOFholding 99.0.0 was not installed: the password was not given. Nothing was changed."
+        );
+        let broken = |_: &[String]| -> Result<(), String> {
+            Err("error: failed to commit transaction".into())
+        };
+        let err = self_update(&http, pacman(), &broken, &mut |_, _| {}).unwrap_err();
+        assert!(err.contains("failed to commit transaction"), "{err}");
     }
 
     #[test]
@@ -1167,7 +1273,8 @@ mod tests {
             r#"{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[]}"#,
         );
         let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: only this test in this binary sets the variable.
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: tests that set this variable hold ENV_LOCK.
         unsafe { std::env::set_var("APPOFHOLDING_ROOT", tmp.path()) };
         let v = self_check(
             &http,
@@ -1202,8 +1309,10 @@ mod tests {
             ),
             (json!(true), json!(true), json!(""))
         );
-        // A package install gets guidance, not a half-finished update.
-        let r = self_update(&http, InstallKind::Unknown, &mut |_, _| {}).unwrap();
+        assert_eq!(v["canInstall"], json!(true));
+        // An install we cannot update ourselves gets guidance, not a half-finished update.
+        let never = |_: &[String]| -> Result<(), String> { panic!("nothing may run") };
+        let r = self_update(&http, InstallKind::Unknown, &never, &mut |_, _| {}).unwrap();
         assert_eq!(r["result"], "manual");
         assert!(
             r["instructions"]

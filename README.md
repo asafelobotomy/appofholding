@@ -37,7 +37,9 @@ sudo make install PREFIX=/usr
 
 On Arch Linux: `cd packaging/arch && makepkg -si`, or install the package attached to a
 [release](https://github.com/asafelobotomy/appofholding/releases) with `run0 pacman -U <file>`.
-After that, `appofholding self update` fetches and verifies new releases for you.
+After that, appOFholding updates itself: use **Update now** when it tells you a new release is out
+(or `appofholding self update --install` in a terminal). It downloads and verifies the release,
+then installs it with `run0 pacman -U`, so your desktop asks for your password.
 
 Releases are made by pushing a version tag (`git tag -a v0.4.0 -m … && git push origin v0.4.0`);
 the release workflow checks that every version string matches the tag, builds and tests the

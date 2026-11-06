@@ -299,6 +299,21 @@ pub enum Applied {
     },
 }
 
+/// Packages from earlier attempts are not needed once a newer one is on its way (an unfinished
+/// download of this same file is kept, so it can resume).
+fn forget_other_downloads(work_dir: &Path, keep: &str) {
+    let partial = format!(".{keep}.part");
+    let Ok(rd) = fs::read_dir(work_dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name != keep && name != partial && e.path().is_file() {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Carry out the update as far as this install kind allows (see the module documentation).
 pub fn apply(
     http: &dyn Http,
@@ -321,6 +336,7 @@ pub fn apply(
     match &status.install {
         InstallKind::Pacman { .. } => {
             let asset = need_asset()?;
+            forget_other_downloads(work_dir, &asset.name);
             let (file, _) = download::download_asset(http, &asset, work_dir, progress)?;
             let command = vec![
                 "run0".to_string(),
@@ -592,13 +608,23 @@ mod tests {
             .json(API, &release("v99.0.0", &pkg, b"i"))
             .bytes("https://dl/pkg", pkg.clone());
         let status = check(&http, pacman(), Arch::X86_64).unwrap();
-        let out = apply(&http, &status, &tmp.path().join("work"), &mut |_, _| {}).unwrap();
+        // A package left over from an earlier update is in the way.
+        let work = tmp.path().join("work");
+        fs::create_dir_all(&work).unwrap();
+        fs::write(work.join("appofholding-0.0.1-1-x86_64.pkg.tar.zst"), b"old").unwrap();
+        let out = apply(&http, &status, &work, &mut |_, _| {}).unwrap();
         let Applied::PackageReady { to, file, command } = out else {
             panic!("expected a package")
         };
         assert_eq!(to, "99.0.0");
         assert_eq!(fs::read(&file).unwrap(), pkg);
         assert_eq!(&command[..3], ["run0", "pacman", "-U"]);
+        assert!(
+            !tmp.path()
+                .join("work/appofholding-0.0.1-1-x86_64.pkg.tar.zst")
+                .exists(),
+            "an older download is cleared away"
+        );
         assert_eq!(command[3], file.display().to_string());
 
         // A corrupted download is rejected and leaves no file behind.

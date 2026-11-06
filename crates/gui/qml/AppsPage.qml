@@ -95,20 +95,17 @@ ThemedPage {
                     onTriggered: Qt.openUrlExternally(selfMessage.info.url)
                 },
                 Kirigami.Action {
-                    text: selfMessage.info && selfMessage.info.install === "appimage"
-                          ? (applicationWindow().progress["@selfUpdate"] !== undefined ? qsTr("Updating…") : qsTr("Update now"))
+                    readonly property bool busy: applicationWindow().progress["@selfUpdate"] !== undefined
+                    text: selfMessage.info && selfMessage.info.canInstall
+                          ? (busy ? qsTr("Updating…") : qsTr("Update now"))
                           : qsTr("How to update")
                     icon.name: "update-none"
-                    enabled: applicationWindow().progress["@selfUpdate"] === undefined
+                    enabled: !busy
                     onTriggered: {
                         var i = selfMessage.info
-                        if (i.install === "appimage") {
-                            applicationWindow().backendObject.start("selfUpdate", "", "", "", "")
-                        } else if (i.command) {
-                            applicationWindow().showPassiveNotification(qsTr("Run in a terminal: %1").arg(i.command))
-                        } else {
-                            Qt.openUrlExternally(i.url)
-                        }
+                        if (i.canInstall) applicationWindow().confirmSelfUpdate()
+                        else if (i.command) applicationWindow().showPassiveNotification(qsTr("Run in a terminal: %1").arg(i.command))
+                        else Qt.openUrlExternally(i.url)
                     }
                 }
             ]

@@ -80,6 +80,14 @@ ThemedPage {
                         : info.available ? qsTr("Version %1 — %2 is available").arg(info.current).arg(info.latest)
                         : qsTr("Version %1 — up to date").arg(info.current)
                 }
+                PrimaryButton {
+                    readonly property var info: applicationWindow().selfInfo
+                    visible: !!info && info.available && info.canInstall
+                    text: qsTr("Update now")
+                    icon.name: "update-none"
+                    enabled: applicationWindow().progress["@selfUpdate"] === undefined
+                    onClicked: applicationWindow().confirmSelfUpdate()
+                }
                 QQC2.Button {
                     text: qsTr("Check now")
                     icon.name: "view-refresh"

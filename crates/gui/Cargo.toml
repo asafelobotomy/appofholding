@@ -21,5 +21,7 @@ serde_json = "1"
 cxx-qt-build = "0.10.0"
 
 [dev-dependencies]
+hex = "0.4.3"
+sha2 = "0.11.1"
 appofholding-core = { path = "../core", features = ["fixtures"] }
 tempfile = "3.27.0"

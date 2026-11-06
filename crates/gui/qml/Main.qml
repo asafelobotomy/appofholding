@@ -76,14 +76,15 @@ Kirigami.ApplicationWindow {
                 break
             case "selfUpdate":
                 if (!ok) {
-                    root.showPassiveNotification(payload)
-                } else if (data.result === "replaced") {
-                    root.showPassiveNotification(qsTr("Updated to %1. Restart appOFholding to use it.").arg(data.to))
+                    root.showPassiveNotification(payload, "long")
+                } else if (data.result === "installed" || data.result === "replaced") {
                     root.selfInfo = null
-                } else if (data.result === "package") {
-                    root.showPassiveNotification(qsTr("Run in a terminal: appofholding self update --install"))
+                    restartDialog.version = data.to
+                    restartDialog.open()
+                } else if (data.result === "current") {
+                    root.showPassiveNotification(qsTr("appOFholding is already up to date"))
                 } else {
-                    root.showPassiveNotification(data.instructions || qsTr("Nothing to update"))
+                    root.showPassiveNotification(data.instructions || qsTr("Nothing to update"), "long")
                 }
                 break
             case "checkAll":
@@ -185,6 +186,59 @@ Kirigami.ApplicationWindow {
         title: qsTr("Choose an AppImage")
         nameFilters: [qsTr("AppImage files (*.AppImage *.appimage)"), qsTr("All files (*)")]
         onAccepted: backend.start("addFile", "", selectedFile.toString(), "", "")
+    }
+
+    function confirmSelfUpdate() { selfUpdateDialog.open() }
+
+    // Updating appOFholding itself: say exactly what will happen before doing it.
+    Kirigami.PromptDialog {
+        id: selfUpdateDialog
+        readonly property var info: root.selfInfo
+        title: info ? qsTr("Update to appOFholding %1?").arg(info.latest) : ""
+        subtitle: !info ? ""
+            : info.install === "pacman"
+              ? qsTr("The package is downloaded from the GitHub release, checked against its published checksum, and installed with pacman. Your system will ask for your password.")
+              : qsTr("The new AppImage is downloaded from the GitHub release, checked against its published checksum, and put in place of this one. The current version is kept beside it.")
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: qsTr("Update")
+                icon.name: "update-none"
+                onTriggered: {
+                    selfUpdateDialog.close()
+                    backend.start("selfUpdate", "", "", "", "")
+                }
+            },
+            Kirigami.Action {
+                text: qsTr("What's new")
+                icon.name: "help-about"
+                onTriggered: Qt.openUrlExternally(selfUpdateDialog.info.url)
+            }
+        ]
+    }
+
+    Kirigami.PromptDialog {
+        id: restartDialog
+        property string version
+        title: qsTr("appOFholding %1 is installed").arg(version)
+        subtitle: qsTr("Restart to start using it. This window keeps running the old version until then.")
+        standardButtons: Kirigami.Dialog.NoButton
+        customFooterActions: [
+            Kirigami.Action {
+                text: qsTr("Restart now")
+                icon.name: "view-refresh"
+                onTriggered: {
+                    var err = backend.relaunch()
+                    if (err) root.showPassiveNotification(err, "long")
+                    else Qt.quit()
+                }
+            },
+            Kirigami.Action {
+                text: qsTr("Later")
+                icon.name: "dialog-cancel"
+                onTriggered: restartDialog.close()
+            }
+        ]
     }
 
     function openAddDialog() { addDialog.openDialog() }
