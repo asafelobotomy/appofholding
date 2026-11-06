@@ -35,7 +35,13 @@ make
 sudo make install PREFIX=/usr
 ```
 
-On Arch Linux: `cd packaging/arch && makepkg -si`.
+On Arch Linux: `cd packaging/arch && makepkg -si`, or install the package attached to a
+[release](https://github.com/asafelobotomy/appofholding/releases) with `run0 pacman -U <file>`.
+After that, `appofholding self update` fetches and verifies new releases for you.
+
+Releases are made by pushing a version tag (`git tag -a v0.4.0 -m … && git push origin v0.4.0`);
+the release workflow checks that every version string matches the tag, builds and tests the
+Arch package, and publishes it with a source archive and `SHA256SUMS`.
 
 Runtime needs: `bubblewrap` and `xdg-dbus-proxy` for the sandbox; `zsync` (optional) for delta
 updates; `libnotify` (optional) for update notifications.

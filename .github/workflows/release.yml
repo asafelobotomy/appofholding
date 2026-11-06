@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag such as `v0.4.0` (matching the version in Cargo.toml) to publish a release:
+#   git tag -a v0.4.0 -m "appOFholding 0.4.0" && git push origin v0.4.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Qt 6 and Kirigami are easiest to get from Arch, and the Arch package is what
+    # `appofholding self update` installs.
+    container: archlinux:latest
+    steps:
+      - name: Install toolchain
+        run: >
+          pacman -Syu --noconfirm --needed base-devel git github-cli rust cmake
+          qt6-base qt6-declarative qt6-svg kirigami qqc2-desktop-style
+          bubblewrap xdg-dbus-proxy hicolor-icon-theme
+
+      - uses: actions/checkout@v5
+
+      - name: Check the tag matches the version everywhere
+        id: version
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$GITHUB_REF_NAME" = "v$v" ] || fail "tag $GITHUB_REF_NAME does not match Cargo.toml version $v"
+          grep -qx "pkgver=$v" packaging/arch/PKGBUILD || fail "packaging/arch/PKGBUILD pkgver is not $v"
+          grep -q "^Version: *$v$" packaging/rpm/appofholding.spec || fail "the rpm spec Version is not $v"
+          grep -q "release version=\"$v\"" packaging/io.github.appofholding.metainfo.xml || fail "metainfo has no $v release"
+          grep -qx "## $v" CHANGELOG.md || fail "CHANGELOG.md has no '## $v' section"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test the Arch package
+        run: |
+          # makepkg refuses to run as root.
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && PKGDEST='$GITHUB_WORKSPACE/dist' BUILDDIR=/tmp/makepkg makepkg --noconfirm"
+
+      - name: Source archive, checksums and notes
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          git archive --format=tar.gz --prefix="appofholding-$V/" -o "dist/appofholding-$V.tar.gz" "$GITHUB_REF_NAME"
+          # Exactly one package, named the way `self update` looks for it.
+          ls dist/appofholding-"$V"-*-*.pkg.tar.zst
+          if ls dist/*-debug-* 2>/dev/null; then echo "::error::unexpected debug package"; exit 1; fi
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          # The release notes are this version's section of the changelog.
+          awk -v v="## $V" '$0 == v {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          pre=""
+          case "$V" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "appOFholding $V" --notes-file notes.md --verify-tag $pre

@@ -13,7 +13,7 @@ jobs:
   core:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Install toolchain
         run: pacman -Syu --noconfirm base-devel git rust cmake qt6-base qt6-declarative qt6-svg kirigami
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
       - name: QML lint

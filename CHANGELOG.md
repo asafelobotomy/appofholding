@@ -1,25 +1,14 @@
 # Changelog
 
-## 0.3.0
+## 0.4.0
 
-- Import: `appofholding import` / **Import existing AppImages…** scans the usual places and your
-  menu entries for loose AppImages, ones other tools integrated, and ones apps keep themselves;
-  shows a dry-run plan, asks for confirmation, can back up (and restore) other tools' menu
-  entries, and adopts files in place.
-- AppImages adopted in place are the user's files: removing the app keeps them unless
-  `--delete-file` is given.
-
-- Redesigned interface: grouped app list with status at a glance, app tiles, a tabbed detail page
-  (Overview, Updates, Launch, Sandbox) built from cards, and a narrow-window layout.
 - Library views: switch between Grid, List and List (Compact) with the buttons above the app
   list; the choice is remembered.
-- Colour themes: Gruvbox light and dark, chosen in Settings > Appearance (applies on the next
-  start). "Follow the system" stays the default.
-- Import dialog: a clear "nothing to import" state, select all / none, plural-correct wording and
-  card rows; action buttons use the new primary style.
-- Internal: lint clean (clippy) across the workspace.
+- Releases: pushing a `v*` tag builds the Arch package and a source archive and publishes them
+  as a GitHub release, which `appofholding self update` can install from.
+- Minimum Rust version is now 1.89.
 
-### Fixed (review)
+### Fixed
 - Sandbox: `/lib64` is recreated with its real target, so sandboxed apps start on Fedora, Debian
   and Ubuntu (it only worked where `lib64 -> usr/lib`). Apps can no longer claim the desktop's
   D-Bus names or a whole vendor's namespace through their own `.desktop` files.
@@ -43,6 +32,25 @@
   survive background refreshes; buttons cannot start the same update twice; installs, imports
   and self-updates have separate progress; "Download and add" installs exactly what was looked
   up; a crashed task no longer leaves the window stuck "working".
+- The "follow the system" colour theme no longer draws text, headings and message boxes
+  transparent; dialogs now take the chosen theme too.
+
+## 0.3.0
+
+- Import: `appofholding import` / **Import existing AppImages…** scans the usual places and your
+  menu entries for loose AppImages, ones other tools integrated, and ones apps keep themselves;
+  shows a dry-run plan, asks for confirmation, can back up (and restore) other tools' menu
+  entries, and adopts files in place.
+- AppImages adopted in place are the user's files: removing the app keeps them unless
+  `--delete-file` is given.
+
+- Redesigned interface: grouped app list with status at a glance, app tiles, a tabbed detail page
+  (Overview, Updates, Launch, Sandbox) built from cards, and a narrow-window layout.
+- Colour themes: Gruvbox light and dark, chosen in Settings > Appearance (applies on the next
+  start). "Follow the system" stays the default.
+- Import dialog: a clear "nothing to import" state, select all / none, plural-correct wording and
+  card rows; action buttons use the new primary style.
+- Internal: lint clean (clippy) across the workspace.
 
 ## 0.2.0
 
