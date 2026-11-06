@@ -351,6 +351,31 @@ pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
     std::fs::write(f, format!("{name}\n")).map_err(e)
 }
 
+/// Improvements worth suggesting for one app on this computer (see `core::suggest`).
+pub fn suggestions(lib: &Library, id: &str) -> Res<Value> {
+    let host = appofholding_core::suggest::Host::detect();
+    let list = lib.suggestions(id, &host).map_err(e)?;
+    Ok(Value::Array(
+        list.into_iter()
+            .map(|s| {
+                json!({
+                    "key": s.key, "title": s.title, "detail": s.detail,
+                    "action": s.action, "dismissible": s.dismissible,
+                })
+            })
+            .collect(),
+    ))
+}
+
+pub fn apply_suggestion(lib: &Library, id: &str, key: &str) -> Res<Value> {
+    let message = lib.apply_suggestion(id, key).map_err(e)?;
+    Ok(json!({ "message": message }))
+}
+
+pub fn dismiss_suggestion(lib: &Library, id: &str, key: &str) -> Res<()> {
+    lib.dismiss_suggestion(id, key).map_err(e)
+}
+
 /// How the library lists apps; the first is the default.
 pub const VIEWS: [&str; 3] = ["list", "grid", "compact"];
 
@@ -900,6 +925,19 @@ mod tests {
         assert_eq!(local_path("/tmp/100%20done"), Path::new("/tmp/100%20done"));
         // A broken escape is kept as written.
         assert_eq!(local_path("file:///tmp/50%"), Path::new("/tmp/50%"));
+    }
+
+    #[test]
+    fn suggestions_are_listed_applied_and_dismissed_through_the_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib =
+            Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
+        add_foo(tmp.path(), &lib);
+        // A plain app: nothing to suggest, and the list is a JSON array.
+        assert_eq!(suggestions(&lib, "foo-app").unwrap(), json!([]));
+        assert!(apply_suggestion(&lib, "foo-app", "nonsense").is_err());
+        dismiss_suggestion(&lib, "foo-app", "electron-wayland").unwrap();
+        assert!(suggestions(&lib, "missing").is_err());
     }
 
     #[test]

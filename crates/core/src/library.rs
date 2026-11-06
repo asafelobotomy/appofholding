@@ -134,14 +134,22 @@ fn pick_desktop(img: &AppImage, file_stem: &str) -> Result<(String, DesktopEntry
 }
 
 /// Rewrite an AppImage's own desktop entry into the one we install. Only `Exec`, `TryExec`
-/// and `Icon` change (plus two additive keys); actions, categories, MIME types and
+/// and `Icon` change (plus a few additive keys); actions, categories, MIME types and
 /// everything else are preserved.
+///
+/// `app_id` is the file name (without `.desktop`) the entry had inside the AppImage. Ours is
+/// named `appofholding-<id>.desktop`, so a window that announces the original name (Qt and GTK
+/// apps on Wayland use it as their app id) would no longer be matched to this entry, and the
+/// taskbar would show a generic icon. `StartupWMClass` restores the link when the app does not
+/// declare one itself.
 pub fn integrate_entry(
     entry: &DesktopEntry,
     id: &str,
     exec_bin: &Path,
     icon_installed: bool,
     profiles: &[String],
+    app_id: Option<&str>,
+    drop: &[&str],
 ) -> String {
     let mut e = entry.clone();
     let wrap = |original: Option<&str>| -> String {
@@ -152,7 +160,11 @@ pub fn integrate_entry(
             id.to_string(),
         ];
         // The first token is the AppImage's own binary (AppRun etc.); our launcher replaces it.
-        args.extend(rest.into_iter().skip(1));
+        args.extend(
+            rest.into_iter()
+                .skip(1)
+                .filter(|a| !drop.contains(&a.as_str())),
+        );
         desktop::join_exec(&args)
     };
     let main_exec = wrap(entry.main("Exec"));
@@ -163,6 +175,11 @@ pub fn integrate_entry(
     }
     if e.main("StartupNotify").is_none() {
         e.set(MAIN, "StartupNotify", "true");
+    }
+    if e.main("StartupWMClass").is_none()
+        && let Some(app_id) = app_id.filter(|a| !a.is_empty())
+    {
+        e.set(MAIN, "StartupWMClass", app_id);
     }
     e.set(MAIN, "X-AppOfHolding-Id", id);
     for g in e.action_groups() {
@@ -202,6 +219,19 @@ pub struct Library {
     pub exec_bin: PathBuf,
     pub(crate) db: Db,
     pub(crate) warnings: std::cell::RefCell<Vec<String>>,
+}
+
+/// The hicolor folder a PNG of `px` pixels belongs in. Icon themes only look in the sizes their
+/// `index.theme` lists, so an icon filed under e.g. `2816x2816` is never found and the menu shows
+/// none: use the largest standard size that is not bigger than the image (desktops scale it).
+fn hicolor_size(px: u32) -> u32 {
+    const SIZES: [u32; 13] = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512];
+    SIZES
+        .iter()
+        .rev()
+        .copied()
+        .find(|s| *s <= px)
+        .unwrap_or(SIZES[0])
 }
 
 impl Library {
@@ -385,7 +415,29 @@ impl Library {
             .map(|(n, _)| n)
             .filter(|n| n != crate::launch::DEFAULT_PROFILE)
             .collect();
-        let text = integrate_entry(&ins.entry, id, &self.exec_bin, icon_file.is_some(), &extra);
+        let app_id = Path::new(&ins.desktop_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned());
+        // The user chose to let a Chromium/Electron app use its own sandbox again: drop the
+        // `--no-sandbox` its menu entry carries.
+        let drop: &[&str] = if self
+            .db
+            .get_setting(id, crate::suggest::CHROMIUM_SANDBOX)?
+            .is_some()
+        {
+            &["--no-sandbox"]
+        } else {
+            &[]
+        };
+        let text = integrate_entry(
+            &ins.entry,
+            id,
+            &self.exec_bin,
+            icon_file.is_some(),
+            &extra,
+            app_id.as_deref(),
+            drop,
+        );
         let desktop_file = self.dirs.desktop_file(id);
         write_atomic(&desktop_file, text.as_bytes())?;
         Ok((desktop_file, icon_file))
@@ -397,7 +449,7 @@ impl Library {
         match icon.format {
             IconFormat::Svg => base.join("scalable/apps").join(format!("{name}.svg")),
             IconFormat::Png => {
-                let s = icon.size.filter(|s| *s > 0).unwrap_or(256);
+                let s = hicolor_size(icon.size.filter(|s| *s > 0).unwrap_or(256));
                 base.join(format!("{s}x{s}/apps"))
                     .join(format!("{name}.png"))
             }
@@ -471,6 +523,54 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icons_go_in_a_size_folder_icon_themes_search() {
+        assert_eq!(hicolor_size(2816), 512);
+        assert_eq!(hicolor_size(512), 512);
+        assert_eq!(hicolor_size(300), 256);
+        assert_eq!(hicolor_size(200), 192);
+        assert_eq!(hicolor_size(48), 48);
+        assert_eq!(hicolor_size(8), 16);
+    }
+
+    #[test]
+    fn the_taskbar_can_match_windows_to_the_renamed_entry() {
+        let plain =
+            DesktopEntry::parse("[Desktop Entry]\nType=Application\nName=Tail\nExec=scale_tail\n")
+                .unwrap();
+        let text = integrate_entry(
+            &plain,
+            "scale-tail",
+            Path::new("/usr/bin/appofholding"),
+            true,
+            &[],
+            Some("io.github.me.scale_tail"),
+            &[],
+        );
+        assert!(
+            text.contains("StartupWMClass=io.github.me.scale_tail"),
+            "{text}"
+        );
+        // What the app declares itself always wins.
+        let own = DesktopEntry::parse(
+            "[Desktop Entry]\nType=Application\nName=G\nExec=AppRun %U\nStartupWMClass=GutCheck\n",
+        )
+        .unwrap();
+        let text = integrate_entry(
+            &own,
+            "g",
+            Path::new("/usr/bin/appofholding"),
+            true,
+            &[],
+            Some("gutcheck"),
+            &[],
+        );
+        assert!(
+            text.contains("StartupWMClass=GutCheck") && !text.contains("StartupWMClass=gutcheck"),
+            "{text}"
+        );
+    }
     use crate::fixture::{self, Item};
 
     struct Env {

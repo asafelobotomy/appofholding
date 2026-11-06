@@ -82,6 +82,13 @@ const MIGRATIONS: &[&str] = &[
      );",
     // v6: apps adopted in place keep their file wherever the user had it
     "ALTER TABLE apps ADD COLUMN external_file INTEGER NOT NULL DEFAULT 0;",
+    // v7: small per-app choices (suggestions dismissed or applied)
+    "CREATE TABLE app_settings (
+        app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+        key    TEXT NOT NULL,
+        value  TEXT NOT NULL,
+        PRIMARY KEY (app_id, key)
+     );",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,6 +410,32 @@ impl Db {
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn get_setting(&self, app_id: &str, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE app_id = ?1 AND key = ?2",
+                [app_id, key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_setting(&self, app_id: &str, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => self.conn.execute(
+                "INSERT INTO app_settings (app_id,key,value) VALUES (?1,?2,?3)
+                 ON CONFLICT(app_id,key) DO UPDATE SET value=?3",
+                params![app_id, key, v],
+            )?,
+            None => self.conn.execute(
+                "DELETE FROM app_settings WHERE app_id = ?1 AND key = ?2",
+                [app_id, key],
+            )?,
+        };
+        Ok(())
     }
 
     pub fn put_profile(&self, app_id: &str, name: &str, p: &Profile) -> Result<()> {

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0
+
+- Suggestions: the Overview tab (and `appofholding suggest`) now points out simple improvements
+  for an app on this computer, each one click to apply and easy to undo or dismiss:
+  - **Let it use Wayland**: Electron apps on a Wayland session get the `electron-auto` preset,
+    so older Electron versions stop running blurry through XWayland.
+  - **Turn Chromium's own sandbox back on**: Electron apps whose menu entry carries
+    `--no-sandbox` can drop it where the system allows user namespaces (checked, including
+    Ubuntu's AppArmor restriction). Turning it off again is one click.
+  - **Start it without FUSE 2**: AppImages built with the old runtime that needs `libfuse.so.2`
+    are unpacked instead of mounted when that library is missing.
+  - **Free up space**: offered when old versions kept for rollback take more than 200 MB.
+
+### Fixed
+- Icons larger than 512 pixels (or of an odd size) were filed in a folder icon themes never
+  search, such as `hicolor/2816x2816`, so the app had no icon in the menu. They now go in the
+  largest standard size folder that fits.
+- Menu entries are renamed `appofholding-<id>.desktop`, which broke the link between a window and
+  its entry for apps that do not declare `StartupWMClass` (taskbar showed a generic icon, pinning
+  did not stick). The original entry name is now written as `StartupWMClass` when the app gives
+  none.
+- An update could be refused as "already being updated" for a moment after another update
+  finished; the lock is now given two seconds to come free.
+
 ## 0.4.2
 
 - Update appOFholding itself from its own window. When a new release is out, **Update now** (in

@@ -535,16 +535,27 @@ impl Library {
             .write(true)
             .open(&path)
             .map_err(Error::io(&path))?;
-        match f.try_lock() {
-            Ok(()) => Ok(f),
-            Err(fs::TryLockError::WouldBlock) => Err(Error::Other(format!(
-                "'{id}' is already being updated by another appOFholding window or task; try again when it has finished"
-            ))),
-            Err(fs::TryLockError::Error(e)) => Err(Error::io(&path)(e)),
+        // A lock just released can look taken for a moment: a process started by another
+        // thread holds a copy of the descriptor between fork and exec. Only a lock that stays
+        // taken means another update is really running.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match f.try_lock() {
+                Ok(()) => return Ok(f),
+                Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err(Error::Other(format!(
+                        "'{id}' is already being updated by another appOFholding window or task; try again when it has finished"
+                    )));
+                }
+                Err(fs::TryLockError::Error(e)) => return Err(Error::io(&path)(e)),
+            }
         }
     }
 
-    fn prune_versions(&self, id: &str, keep: usize) -> Result<()> {
+    pub(crate) fn prune_versions(&self, id: &str, keep: usize) -> Result<()> {
         for v in self.db.list_versions(id)?.into_iter().skip(keep) {
             match fs::remove_file(&v.path) {
                 Ok(()) => {}

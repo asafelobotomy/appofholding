@@ -21,6 +21,9 @@ tool (`appofholding`) that share one library.
 - **Your launch options survive updates.** Arguments, environment, command prefix, presets such
   as `electron-wayland` or `no-sandbox`, extra profiles in the right-click menu, and hooks — all
   stored in a database, never in the generated `.desktop` file.
+- **Suggestions that fit your system.** Electron apps blurry under XWayland, Chromium's sandbox
+  switched off without need, old runtimes that need FUSE 2, old versions eating space: each app's
+  Overview (or `appofholding suggest`) offers a one-click fix you can undo.
 - **Optional sandbox.** `standard` or `strict`, a private home folder per app, filtered desktop
   services, no FUSE needed. See [docs/sandbox.md](docs/sandbox.md) for what it does and its limits.
 - **Repeatable setups.** `appofholding export` / `apply` move your whole setup between machines

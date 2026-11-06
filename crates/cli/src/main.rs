@@ -123,6 +123,18 @@ enum Cmd {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Show simple improvements for apps (Wayland for Electron apps, Chromium's own sandbox,
+    /// starting without FUSE 2, space used by old versions), and apply or dismiss one.
+    Suggest {
+        /// The app; without it, every app is checked.
+        id: Option<String>,
+        /// Apply the suggestion with this key (shown in brackets).
+        #[arg(long, requires = "id", conflicts_with = "dismiss")]
+        apply: Option<String>,
+        /// Stop showing the suggestion with this key.
+        #[arg(long, requires = "id")]
+        dismiss: Option<String>,
+    },
     /// Make the library match a configuration file (see `export`). Safe to run repeatedly.
     Apply {
         file: PathBuf,
@@ -1500,6 +1512,40 @@ fn main() -> Result<()> {
                 lib.set_hook(&rec.id, "post-install", &cmd)?;
                 lib.run_hook(&rec.id, "post-install")?;
                 println!("  post-install hook ran");
+            }
+        }
+        Cmd::Suggest { id, apply, dismiss } => {
+            let lib = library()?;
+            if let (Some(id), Some(key)) = (&id, &apply) {
+                println!("{id}: {}", lib.apply_suggestion(id, key)?);
+                return Ok(());
+            }
+            if let (Some(id), Some(key)) = (&id, &dismiss) {
+                lib.dismiss_suggestion(id, key)?;
+                println!("{id}: '{key}' will not be suggested again.");
+                return Ok(());
+            }
+            let host = appofholding_core::suggest::Host::detect();
+            let ids: Vec<String> = match id {
+                Some(i) => vec![i],
+                None => lib.list()?.into_iter().map(|a| a.id).collect(),
+            };
+            let mut any = false;
+            for i in &ids {
+                match lib.suggestions(i, &host) {
+                    Ok(list) => {
+                        for s in list {
+                            any = true;
+                            println!("{i}: {}  [{}]\n    {}", s.title, s.key, s.detail);
+                        }
+                    }
+                    Err(e) => println!("{i}: could not check: {e}"),
+                }
+            }
+            if !any {
+                println!("No suggestions.");
+            } else {
+                println!("\nApply one with: appofholding suggest <id> --apply <key>");
             }
         }
         Cmd::List => {

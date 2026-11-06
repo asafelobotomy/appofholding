@@ -28,6 +28,7 @@ pub mod sandbox;
 pub mod schedule;
 pub mod selfupdate;
 pub mod source;
+pub mod suggest;
 pub mod updates;
 pub mod version;
 

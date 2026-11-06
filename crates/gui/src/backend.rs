@@ -99,6 +99,17 @@ pub mod qobject {
         #[cxx_name = "setView"]
         #[qinvokable]
         fn set_view(self: &Backend, name: &QString) -> QString;
+        /// Suggested improvements for an app: JSON array of {key, title, detail, action,
+        /// dismissible}, or {"error": ...}.
+        #[qinvokable]
+        fn suggestions(self: &Backend, id: &QString) -> QString;
+        /// Apply one: {"message": ...} or {"error": ...}.
+        #[cxx_name = "applySuggestion"]
+        #[qinvokable]
+        fn apply_suggestion(self: &Backend, id: &QString, key: &QString) -> QString;
+        #[cxx_name = "dismissSuggestion"]
+        #[qinvokable]
+        fn dismiss_suggestion(self: &Backend, id: &QString, key: &QString) -> QString;
         /// Start a fresh copy of the program (after an update); "" or the error. The caller
         /// then quits this one.
         #[qinvokable]
@@ -316,6 +327,17 @@ impl qobject::Backend {
                 .map_err(|e| e.to_string())
                 .and_then(|d| service::view_save(&d, &s(name))),
         )
+    }
+    pub fn suggestions(&self, id: &QString) -> QString {
+        json_or_err(with_lib(|l| service::suggestions(l, &s(id))))
+    }
+    pub fn apply_suggestion(&self, id: &QString, key: &QString) -> QString {
+        json_or_err(with_lib(|l| service::apply_suggestion(l, &s(id), &s(key))))
+    }
+    pub fn dismiss_suggestion(&self, id: &QString, key: &QString) -> QString {
+        unit(with_lib(|l| {
+            service::dismiss_suggestion(l, &s(id), &s(key))
+        }))
     }
     pub fn relaunch(&self) -> QString {
         // Running as an AppImage: start the AppImage file itself (which now holds the new

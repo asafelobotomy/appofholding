@@ -14,6 +14,71 @@ ColumnLayout {
 
     spacing: Kirigami.Units.largeSpacing
 
+    // Simple improvements for this app on this computer, each one click to apply or dismiss.
+    property var suggestions: []
+    function loadSuggestions() {
+        if (!tab.appId || !tab.backend) return
+        var r = Util.parse(tab.backend.suggestions(tab.appId))
+        tab.suggestions = r.error ? [] : r
+    }
+    onDetailChanged: loadSuggestions()
+    onAppIdChanged: loadSuggestions()
+
+    SectionCard {
+        visible: tab.suggestions.length > 0
+        title: qsTr("Suggestions")
+        iconName: "tools-wizard"
+        subtitle: qsTr("Small changes that may make this app work better here. Nothing changes unless you choose it.")
+
+        Repeater {
+            model: tab.suggestions
+            ColumnLayout {
+                required property var modelData
+                required property int index
+                Layout.fillWidth: true
+                Layout.topMargin: index > 0 ? Kirigami.Units.smallSpacing : 0
+                spacing: Kirigami.Units.smallSpacing
+
+                Kirigami.Separator { visible: index > 0; Layout.fillWidth: true }
+                QQC2.Label {
+                    text: modelData.title
+                    font.weight: Font.DemiBold
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+                QQC2.Label {
+                    text: modelData.detail
+                    wrapMode: Text.Wrap
+                    opacity: 0.8
+                    Layout.fillWidth: true
+                }
+                RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    PrimaryButton {
+                        text: modelData.action
+                        icon.name: "dialog-ok-apply"
+                        onClicked: {
+                            var r = Util.parse(tab.backend.applySuggestion(tab.appId, modelData.key))
+                            applicationWindow().showPassiveNotification(r.error ? r.error : r.message, r.error ? "long" : "short")
+                            applicationWindow().reload()
+                        }
+                    }
+                    QQC2.Button {
+                        visible: modelData.dismissible
+                        text: qsTr("Not for this app")
+                        icon.name: "dialog-cancel"
+                        flat: true
+                        onClicked: {
+                            var err = tab.backend.dismissSuggestion(tab.appId, modelData.key)
+                            if (err) applicationWindow().showPassiveNotification(err)
+                            tab.loadSuggestions()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ---- at a glance: three small summaries that each lead to a tab
     GridLayout {
         Layout.fillWidth: true
