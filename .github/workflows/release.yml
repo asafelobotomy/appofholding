@@ -44,6 +44,14 @@ jobs:
           chown -R builder "$GITHUB_WORKSPACE"
           su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && PKGDEST='$GITHUB_WORKSPACE/dist' BUILDDIR=/tmp/makepkg makepkg --noconfirm"
 
+      - name: The GUI must not depend on Qt's private API
+        # Private symbols tie the binary to the exact Qt version it was built with, so a package
+        # built on Arch would not start on a distribution one Qt release behind (e.g. Manjaro).
+        run: |
+          if nm -D --undefined-only target/release/appofholding-gui | grep Qt_6_PRIVATE_API; then
+            echo "::error::appofholding-gui uses private Qt symbols"; exit 1
+          fi
+
       - name: Source archive, checksums and notes
         env:
           V: ${{ steps.version.outputs.version }}

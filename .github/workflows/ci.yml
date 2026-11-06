@@ -32,5 +32,11 @@ jobs:
       - uses: actions/checkout@v5
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - name: The GUI must not depend on Qt's private API
+        run: |
+          cargo build --locked -p appofholding-gui
+          if nm -D --undefined-only target/debug/appofholding-gui | grep Qt_6_PRIVATE_API; then
+            echo "::error::appofholding-gui uses private Qt symbols (see crates/gui/build.rs)"; exit 1
+          fi
       - name: QML lint
         run: /usr/lib/qt6/bin/qmllint crates/gui/qml/*.qml || true
