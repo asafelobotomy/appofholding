@@ -194,6 +194,10 @@ fn unit(r: Res<()>) -> QString {
     }
 }
 
+fn with_dirs<T>(f: impl FnOnce(&appofholding_core::Dirs) -> Res<T>) -> Res<T> {
+    f(&appofholding_core::Dirs::detect().map_err(|e| e.to_string())?)
+}
+
 fn with_lib<T>(f: impl FnOnce(&appofholding_core::Library) -> Res<T>) -> Res<T> {
     f(&service::open_lib()?)
 }
@@ -221,11 +225,7 @@ impl qobject::Backend {
         }
     }
     pub fn schedule_status(&self) -> QString {
-        json_or_err(
-            appofholding_core::Dirs::detect()
-                .map(|d| service::schedule_status(&d))
-                .map_err(|e| e.to_string()),
-        )
+        json_or_err(with_dirs(|d| Ok(service::schedule_status(d))))
     }
     pub fn data_dir(&self) -> QString {
         let d = appofholding_core::Dirs::detect()
@@ -241,17 +241,12 @@ impl qobject::Backend {
         started_in_tray()
     }
     pub fn desktop_settings(&self) -> QString {
-        json_or_err(
-            appofholding_core::Dirs::detect()
-                .map(|d| service::desktop_load(&d))
-                .map_err(|e| e.to_string()),
-        )
+        json_or_err(with_dirs(|d| Ok(service::desktop_load(d))))
     }
     pub fn set_desktop_settings(&self, json: &QString) -> QString {
         unit((|| {
             let v: Value = serde_json::from_str(&s(json)).map_err(|e| e.to_string())?;
-            let dirs = appofholding_core::Dirs::detect().map_err(|e| e.to_string())?;
-            service::desktop_save(&dirs, &v, &service::gui_exe()?)
+            with_dirs(|d| service::desktop_save(d, &v, &service::gui_exe()?))
         })())
     }
     pub fn listen(self: Pin<&mut Self>) {
@@ -336,28 +331,16 @@ impl qobject::Backend {
         unit(with_lib(|l| service::remove_app(l, &s(id), purge)))
     }
     pub fn schedule_install(&self, interval: &QString) -> QString {
-        unit(
-            appofholding_core::Dirs::detect()
-                .map_err(|e| e.to_string())
-                .and_then(|d| service::schedule_install(&d, &s(interval))),
-        )
+        unit(with_dirs(|d| service::schedule_install(d, &s(interval))))
     }
     pub fn schedule_remove(&self) -> QString {
-        unit(
-            appofholding_core::Dirs::detect()
-                .map_err(|e| e.to_string())
-                .and_then(|d| service::schedule_remove(&d)),
-        )
+        unit(with_dirs(service::schedule_remove))
     }
     pub fn theme(&self) -> QString {
         q(&current_theme())
     }
     pub fn set_theme(&self, name: &QString) -> QString {
-        unit(
-            appofholding_core::Dirs::detect()
-                .map_err(|e| e.to_string())
-                .and_then(|d| service::theme_save(&d, &s(name))),
-        )
+        unit(with_dirs(|d| service::theme_save(d, &s(name))))
     }
     pub fn view(&self) -> QString {
         q(&appofholding_core::Dirs::detect()
@@ -365,11 +348,7 @@ impl qobject::Backend {
             .unwrap_or_else(|_| "list".into()))
     }
     pub fn set_view(&self, name: &QString) -> QString {
-        unit(
-            appofholding_core::Dirs::detect()
-                .map_err(|e| e.to_string())
-                .and_then(|d| service::view_save(&d, &s(name))),
-        )
+        unit(with_dirs(|d| service::view_save(d, &s(name))))
     }
     pub fn suggestions(&self, id: &QString) -> QString {
         json_or_err(with_lib(|l| service::suggestions(l, &s(id))))

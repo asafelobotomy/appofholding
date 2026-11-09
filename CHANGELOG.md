@@ -31,6 +31,12 @@
     when the app runs as root; the Sandbox summary says what is allowed; the File card shows the
     app's id for the command line, and "Show in folder" works for folders with unusual names.
   - The duplicate *Open* action in the page header was removed (it is the button by the name).
+- Settings showed "Every day" for the background checks whatever interval was installed; it now
+  reads the interval back from the timer, and `appofholding schedule status` prints it too.
+- Cleanup: the timer is turned on and off by one shared function instead of copies in the CLI
+  and the interface; the unused `percent-encoding` dependency and `notify::Silent` were removed;
+  the interface's settings files share one loader; `docs/configuration.md` lists every interface
+  setting, including the tray and autostart ones.
 - The interface now creates a Qt Widgets application, so the tray icon also works on panels that
   only offer the older XEmbed tray. Packages gain a dependency on Qt Labs Platform (part of
   `qt6-declarative` on Arch and Fedora; `qml6-module-qt-labs-platform` on Debian/Ubuntu).

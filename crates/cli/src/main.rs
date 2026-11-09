@@ -1283,14 +1283,6 @@ fn describe_outcome(o: &Outcome) -> String {
     }
 }
 
-fn systemctl(args: &[&str]) -> bool {
-    Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
     let dirs = dirs()?;
     match cmd {
@@ -1300,12 +1292,11 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
             };
             let exe = std::env::current_exe().context("cannot determine own path")?;
             let exe = appofholding_core::paths::stable_exec_path(exe);
-            let (svc, timer) = schedule::write_units(&dirs, &exe, iv)?;
+            let enabled = schedule::enable(&dirs, &exe, iv)?;
+            let (svc, timer) = schedule::unit_paths(&dirs);
             println!("Wrote {}\n      {}", svc.display(), timer.display());
             if dirs.refresh_caches {
-                if systemctl(&["daemon-reload"])
-                    && systemctl(&["enable", "--now", "appofholding-update.timer"])
-                {
+                if enabled {
                     println!("Background checks are on ({interval}).");
                 } else {
                     println!(
@@ -1315,13 +1306,7 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
             }
         }
         ScheduleCmd::Remove => {
-            if dirs.refresh_caches {
-                systemctl(&["disable", "--now", "appofholding-update.timer"]);
-            }
-            let removed = schedule::remove_units(&dirs)?;
-            if dirs.refresh_caches {
-                systemctl(&["daemon-reload"]);
-            }
+            let removed = schedule::disable(&dirs)?;
             println!(
                 "{}",
                 if removed {
@@ -1332,17 +1317,16 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
             );
         }
         ScheduleCmd::Status => {
-            let (svc, timer) = schedule::unit_paths(&dirs);
-            println!(
-                "units:  {}",
-                if svc.exists() && timer.exists() {
-                    "installed"
-                } else {
-                    "not installed"
-                }
-            );
+            match (
+                schedule::installed(&dirs),
+                schedule::installed_interval(&dirs),
+            ) {
+                (true, Some(iv)) => println!("units:  installed ({})", iv.as_str()),
+                (true, None) => println!("units:  installed"),
+                (false, _) => println!("units:  not installed"),
+            }
             if dirs.refresh_caches {
-                systemctl(&["list-timers", "appofholding-update.timer", "--no-pager"]);
+                schedule::show_status();
             }
         }
     }

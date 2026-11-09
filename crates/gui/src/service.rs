@@ -330,26 +330,36 @@ pub fn remove_app(lib: &Library, id: &str, purge: bool) -> Res<()> {
 /// Colour themes the interface offers; the first is "follow the desktop".
 pub const THEMES: [&str; 3] = ["system", "gruvbox-dark", "gruvbox-light"];
 
-fn theme_file(dirs: &Dirs) -> std::path::PathBuf {
-    dirs.config_home.join("appofholding").join("gui-theme")
+/// A one-word interface setting kept in `~/.config/appofholding/<file>`, one of `choices`.
+fn gui_file(dirs: &Dirs, file: &str) -> PathBuf {
+    dirs.config_home.join("appofholding").join(file)
+}
+
+/// The saved choice; anything missing or unrecognised means the first one.
+fn choice_load(dirs: &Dirs, file: &str, choices: &[&str]) -> String {
+    std::fs::read_to_string(gui_file(dirs, file))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| choices.contains(&t.as_str()))
+        .unwrap_or_else(|| choices[0].to_string())
+}
+
+fn choice_save(dirs: &Dirs, file: &str, choices: &[&str], what: &str, name: &str) -> Res<()> {
+    if !choices.contains(&name) {
+        return Err(format!("unknown {what} '{name}'"));
+    }
+    let f = gui_file(dirs, file);
+    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
+    std::fs::write(f, format!("{name}\n")).map_err(e)
 }
 
 /// The saved colour theme; anything missing or unrecognised means "system".
 pub fn theme_load(dirs: &Dirs) -> String {
-    std::fs::read_to_string(theme_file(dirs))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| THEMES.contains(&t.as_str()))
-        .unwrap_or_else(|| THEMES[0].to_string())
+    choice_load(dirs, "gui-theme", &THEMES)
 }
 
 pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
-    if !THEMES.contains(&name) {
-        return Err(format!("unknown theme '{name}'"));
-    }
-    let f = theme_file(dirs);
-    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
-    std::fs::write(f, format!("{name}\n")).map_err(e)
+    choice_save(dirs, "gui-theme", &THEMES, "theme", name)
 }
 
 /// Improvements worth suggesting for one app on this computer (see `core::suggest`).
@@ -380,26 +390,13 @@ pub fn dismiss_suggestion(lib: &Library, id: &str, key: &str) -> Res<()> {
 /// How the library lists apps; the first is the default.
 pub const VIEWS: [&str; 3] = ["list", "grid", "compact"];
 
-fn view_file(dirs: &Dirs) -> std::path::PathBuf {
-    dirs.config_home.join("appofholding").join("gui-view")
-}
-
 /// The saved library layout; anything missing or unrecognised means "list".
 pub fn view_load(dirs: &Dirs) -> String {
-    std::fs::read_to_string(view_file(dirs))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| VIEWS.contains(&t.as_str()))
-        .unwrap_or_else(|| VIEWS[0].to_string())
+    choice_load(dirs, "gui-view", &VIEWS)
 }
 
 pub fn view_save(dirs: &Dirs, name: &str) -> Res<()> {
-    if !VIEWS.contains(&name) {
-        return Err(format!("unknown view '{name}'"));
-    }
-    let f = view_file(dirs);
-    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
-    std::fs::write(f, format!("{name}\n")).map_err(e)
+    choice_save(dirs, "gui-view", &VIEWS, "view", name)
 }
 
 // ---- desktop integration: tray icon, starting with the session
@@ -456,9 +453,7 @@ impl DesktopSettings {
 }
 
 fn desktop_file(dirs: &Dirs) -> PathBuf {
-    dirs.config_home
-        .join("appofholding")
-        .join("gui-desktop.json")
+    gui_file(dirs, "gui-desktop.json")
 }
 
 /// The XDG autostart entry that starts appOFholding when the user logs in.
@@ -540,41 +535,22 @@ pub fn gui_exe() -> Res<PathBuf> {
 }
 
 pub fn schedule_status(dirs: &Dirs) -> Value {
-    let (svc, timer) = schedule::unit_paths(dirs);
-    json!({ "installed": svc.exists() && timer.exists() })
+    json!({
+        "installed": schedule::installed(dirs),
+        "interval": schedule::installed_interval(dirs).map(Interval::as_str),
+    })
 }
 
 pub fn schedule_install(dirs: &Dirs, interval: &str) -> Res<()> {
     let iv = Interval::parse(interval).ok_or("interval must be hourly, daily or weekly")?;
-    schedule::write_units(dirs, &cli_path(), iv).map_err(e)?;
-    if dirs.refresh_caches {
-        let ok = |args: &[&str]| {
-            Command::new("systemctl")
-                .arg("--user")
-                .args(args)
-                .status()
-                .is_ok_and(|s| s.success())
-        };
-        if !(ok(&["daemon-reload"]) && ok(&["enable", "--now", "appofholding-update.timer"])) {
-            return Err("wrote the timer files but systemd would not enable them".into());
-        }
+    if !schedule::enable(dirs, &cli_path(), iv).map_err(e)? {
+        return Err("wrote the timer files but systemd would not enable them".into());
     }
     Ok(())
 }
 
 pub fn schedule_remove(dirs: &Dirs) -> Res<()> {
-    if dirs.refresh_caches {
-        let _ = Command::new("systemctl")
-            .args(["--user", "disable", "--now", "appofholding-update.timer"])
-            .status();
-    }
-    schedule::remove_units(dirs).map(|_| ()).map_err(e)?;
-    if dirs.refresh_caches {
-        let _ = Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-    }
-    Ok(())
+    schedule::disable(dirs).map(|_| ()).map_err(e)
 }
 
 // ---- operations that need the network (the backend runs these on a worker thread)
@@ -1002,7 +978,7 @@ mod tests {
         theme_save(&dirs, "gruvbox-light").unwrap();
         assert_eq!(theme_load(&dirs), "gruvbox-light");
         assert!(theme_save(&dirs, "../evil").is_err());
-        std::fs::write(theme_file(&dirs), "garbage").unwrap();
+        std::fs::write(gui_file(&dirs, "gui-theme"), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
     }
 
@@ -1143,7 +1119,7 @@ mod tests {
         view_save(&dirs, "compact").unwrap();
         assert_eq!(view_load(&dirs), "compact");
         assert!(view_save(&dirs, "../evil").is_err());
-        std::fs::write(view_file(&dirs), "garbage").unwrap();
+        std::fs::write(gui_file(&dirs, "gui-view"), "garbage").unwrap();
         assert_eq!(view_load(&dirs), "list");
     }
 

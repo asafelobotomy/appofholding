@@ -8,8 +8,13 @@ ThemedPage {
     title: qsTr("Settings")
     readonly property var backend: applicationWindow().backendObject
     property bool scheduled: false
+    property string scheduledInterval: "daily"
 
-    function load() { scheduled = !!Util.parse(backend.scheduleStatus()).installed }
+    function load() {
+        var st = Util.parse(backend.scheduleStatus())
+        scheduled = !!st.installed
+        if (st.interval) scheduledInterval = st.interval
+    }
     Component.onCompleted: load()
 
     ColumnLayout {
@@ -131,10 +136,11 @@ ThemedPage {
                     id: interval
                     readonly property var keys: ["hourly", "daily", "weekly"]
                     model: [qsTr("Every hour"), qsTr("Every day"), qsTr("Every week")]
-                    currentIndex: 1
+                    currentIndex: Math.max(0, keys.indexOf(page.scheduledInterval))
                     onActivated: if (page.scheduled) {
                         var err = page.backend.scheduleInstall(keys[currentIndex])
                         if (err) applicationWindow().showPassiveNotification(err)
+                        page.load()
                     }
                 }
             }
