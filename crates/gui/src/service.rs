@@ -143,6 +143,7 @@ pub fn app_detail(lib: &Library, id: &str) -> Res<Value> {
         "running": !appofholding_core::running::running_pids(&a.appimage_path).is_empty(),
         "source": src.as_ref().map(|s| json!({
             "describe": s.source.describe(),
+            "link": appofholding_core::config::source_to_input(&s.source.provider),
             "origin": if s.source.origin == source::Origin::Embedded { "embedded" } else { "user" },
             "pattern": s.source.asset_pattern,
             "channel": s.source.channel.to_string(),
@@ -399,6 +400,143 @@ pub fn view_save(dirs: &Dirs, name: &str) -> Res<()> {
     let f = view_file(dirs);
     std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
     std::fs::write(f, format!("{name}\n")).map_err(e)
+}
+
+// ---- desktop integration: tray icon, starting with the session
+
+/// How the window behaves on the desktop. Missing keys take these defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopSettings {
+    /// Show an icon in the system tray.
+    pub tray: bool,
+    /// Minimising the window hides it in the tray.
+    pub minimise_to_tray: bool,
+    /// Closing the window keeps appOFholding running in the tray.
+    pub close_to_tray: bool,
+    /// While in the tray, check for updates and announce new versions.
+    pub notify_updates: bool,
+    /// Started with the session: stay in the tray instead of opening the window.
+    pub start_in_tray: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self {
+            tray: false,
+            minimise_to_tray: false,
+            close_to_tray: false,
+            notify_updates: true,
+            start_in_tray: true,
+        }
+    }
+}
+
+impl DesktopSettings {
+    fn to_json(&self) -> Value {
+        json!({
+            "tray": self.tray,
+            "minimiseToTray": self.minimise_to_tray,
+            "closeToTray": self.close_to_tray,
+            "notifyUpdates": self.notify_updates,
+            "startInTray": self.start_in_tray,
+        })
+    }
+
+    fn from_json(v: &Value) -> Self {
+        let d = Self::default();
+        let b = |k: &str, def: bool| v.get(k).and_then(Value::as_bool).unwrap_or(def);
+        Self {
+            tray: b("tray", d.tray),
+            minimise_to_tray: b("minimiseToTray", d.minimise_to_tray),
+            close_to_tray: b("closeToTray", d.close_to_tray),
+            notify_updates: b("notifyUpdates", d.notify_updates),
+            start_in_tray: b("startInTray", d.start_in_tray),
+        }
+    }
+}
+
+fn desktop_file(dirs: &Dirs) -> PathBuf {
+    dirs.config_home
+        .join("appofholding")
+        .join("gui-desktop.json")
+}
+
+/// The XDG autostart entry that starts appOFholding when the user logs in.
+pub fn autostart_file(dirs: &Dirs) -> PathBuf {
+    dirs.config_home
+        .join("autostart")
+        .join("io.github.appofholding.desktop")
+}
+
+/// The command-line flag for "start in the tray, without opening the window".
+pub const TRAY_FLAG: &str = "--tray";
+
+/// The settings plus whether the autostart entry exists, for the Settings page.
+pub fn desktop_load(dirs: &Dirs) -> Value {
+    let saved = std::fs::read_to_string(desktop_file(dirs))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .unwrap_or(Value::Null);
+    let mut v = DesktopSettings::from_json(&saved).to_json();
+    v["autostart"] = json!(autostart_file(dirs).exists());
+    v
+}
+
+/// Save the settings; `autostart` in `v` writes or removes the login entry, which starts
+/// `gui_exe` (with `--tray` when it should stay in the tray).
+pub fn desktop_save(dirs: &Dirs, v: &Value, gui_exe: &Path) -> Res<()> {
+    let s = DesktopSettings::from_json(v);
+    let f = desktop_file(dirs);
+    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
+    std::fs::write(&f, format!("{:#}\n", s.to_json())).map_err(e)?;
+    let auto = autostart_file(dirs);
+    if v.get("autostart").and_then(Value::as_bool).unwrap_or(false) {
+        if !gui_exe.is_absolute() {
+            return Err("cannot tell where appOFholding is installed".into());
+        }
+        std::fs::create_dir_all(auto.parent().expect("has a parent")).map_err(e)?;
+        std::fs::write(&auto, autostart_text(gui_exe, s.tray && s.start_in_tray)).map_err(e)?;
+    } else {
+        match std::fs::remove_file(&auto) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(e(err)),
+        }
+    }
+    Ok(())
+}
+
+pub fn autostart_text(gui_exe: &Path, in_tray: bool) -> String {
+    let mut exec = desktop::quote_exec_arg(&gui_exe.to_string_lossy());
+    if in_tray {
+        exec.push(' ');
+        exec.push_str(TRAY_FLAG);
+    }
+    format!(
+        "[Desktop Entry]\nType=Application\nName=appOFholding\n\
+         Comment=Keep AppImages up to date\nExec={exec}\nIcon=io.github.appofholding\n\
+         Terminal=false\nX-GNOME-Autostart-enabled=true\nX-KDE-autostart-after=panel\n"
+    )
+}
+
+/// The file that starts this interface again: the AppImage when running as one (this binary
+/// is inside its temporary mount), otherwise this binary. After a package update the running
+/// file was replaced, and `/proc/self/exe` reads "<path> (deleted)"; the path itself then
+/// holds the new version.
+pub fn gui_exe() -> Res<PathBuf> {
+    if let Some(image) = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        return Ok(image);
+    }
+    std::fs::read_link("/proc/self/exe")
+        .or_else(|_| std::env::current_exe())
+        .map(|p| {
+            let s = p.to_string_lossy();
+            PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(&s).to_string())
+        })
+        .map_err(e)
 }
 
 pub fn schedule_status(dirs: &Dirs) -> Value {
@@ -805,6 +943,22 @@ pub fn check_all(lib: &Library, http: &(dyn appofholding_core::http::Http + Sync
     Ok(Value::Array(results))
 }
 
+/// The tray's background check: check every app, then hand out the updates the user has not
+/// been told about yet ({results, fresh: [{id, name, version}]}).
+pub fn notify_check(
+    lib: &Library,
+    http: &(dyn appofholding_core::http::Http + Sync),
+) -> Res<Value> {
+    let results = check_all(lib, http)?;
+    let fresh = lib
+        .take_unannounced_updates()
+        .map_err(e)?
+        .into_iter()
+        .map(|u| json!({"id": u.id, "name": u.name, "version": u.version}))
+        .collect::<Vec<_>>();
+    Ok(json!({"results": results, "fresh": fresh}))
+}
+
 pub fn update_app(
     lib: &Library,
     http: &dyn appofholding_core::http::Http,
@@ -938,6 +1092,45 @@ mod tests {
         assert!(apply_suggestion(&lib, "foo-app", "nonsense").is_err());
         dismiss_suggestion(&lib, "foo-app", "electron-wayland").unwrap();
         assert!(suggestions(&lib, "missing").is_err());
+    }
+
+    #[test]
+    fn desktop_settings_and_autostart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::with_root(tmp.path());
+        let d = desktop_load(&dirs);
+        assert_eq!(d["tray"], false);
+        assert_eq!(d["notifyUpdates"], true);
+        assert_eq!(d["autostart"], false);
+
+        let exe = Path::new("/opt/My Apps/appofholding-gui");
+        let on = json!({"tray": true, "closeToTray": true, "startInTray": true, "autostart": true});
+        desktop_save(&dirs, &on, exe).unwrap();
+        let d = desktop_load(&dirs);
+        assert_eq!(d["tray"], true);
+        assert_eq!(d["closeToTray"], true);
+        assert_eq!(d["minimiseToTray"], false);
+        assert_eq!(d["autostart"], true);
+        let entry = std::fs::read_to_string(autostart_file(&dirs)).unwrap();
+        assert!(
+            entry.contains("Exec=\"/opt/My Apps/appofholding-gui\" --tray\n"),
+            "{entry}"
+        );
+
+        // Without a tray icon it cannot start hidden: the window opens.
+        desktop_save(&dirs, &json!({"tray": false, "autostart": true}), exe).unwrap();
+        let entry = std::fs::read_to_string(autostart_file(&dirs)).unwrap();
+        assert!(!entry.contains("--tray"), "{entry}");
+
+        desktop_save(&dirs, &json!({"autostart": false}), exe).unwrap();
+        assert!(!autostart_file(&dirs).exists());
+        assert_eq!(desktop_load(&dirs)["autostart"], false);
+        // Turning it off twice is fine; a relative path is refused.
+        desktop_save(&dirs, &json!({"autostart": false}), exe).unwrap();
+        assert!(desktop_save(&dirs, &json!({"autostart": true}), Path::new("gui")).is_err());
+
+        std::fs::write(desktop_file(&dirs), "garbage").unwrap();
+        assert_eq!(desktop_load(&dirs)["tray"], false);
     }
 
     #[test]

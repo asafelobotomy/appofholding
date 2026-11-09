@@ -110,7 +110,9 @@ ColumnLayout {
                 opacity: 0.7
                 color: Kirigami.Theme.textColor
                 font: Kirigami.Theme.smallFont
-                text: tab.src ? qsTr("Checked %1 · from %2").arg(Util.ago(tab.src.lastChecked)).arg(tab.src.describe) : qsTr("Add a link to get new versions automatically.")
+                text: !tab.src ? qsTr("Add a link to get new versions automatically.")
+                    : (tab.src.lastChecked ? qsTr("Checked %1").arg(Util.ago(tab.src.lastChecked)) : qsTr("Never checked"))
+                      + " · " + qsTr("from %1").arg(tab.src.describe)
             }
             QQC2.Button {
                 flat: true
@@ -128,13 +130,15 @@ ColumnLayout {
             Layout.alignment: Qt.AlignTop
             readonly property var l: tab.detail.launch || ({})
             readonly property int count: ((l.presets || []).length) + (l.args ? 1 : 0) + (l.env ? 1 : 0) + (l.prefix ? 1 : 0)
+                + (l.cwd ? 1 : 0) + (l.extractAndRun ? 1 : 0) + (l.elevated ? 1 : 0)
             Text {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 font.weight: Font.DemiBold
                 font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.05
-                color: Kirigami.Theme.textColor
-                text: launchCard.count === 0 ? qsTr("Default launch") : qsTr("Customised")
+                color: launchCard.l.elevated ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
+                text: launchCard.l.elevated ? qsTr("Runs as administrator")
+                    : launchCard.count === 0 ? qsTr("Default launch") : qsTr("%n change(s) from the default", "", launchCard.count)
             }
             Text {
                 Layout.fillWidth: true
@@ -143,7 +147,8 @@ ColumnLayout {
                 color: Kirigami.Theme.textColor
                 font: Kirigami.Theme.smallFont
                 text: (tab.detail.profiles && tab.detail.profiles.length > 1)
-                    ? qsTr("%1 extra profile(s) in the right-click menu").arg(tab.detail.profiles.length - 1)
+                    ? qsTr("%n extra profile(s) in the right-click menu", "", tab.detail.profiles.length - 1)
+                    : (launchCard.l.presets || []).length > 0 ? qsTr("Quick fixes: %1").arg(launchCard.l.presets.join(", "))
                     : qsTr("Arguments, environment and ready-made fixes.")
             }
             QQC2.Button {
@@ -175,7 +180,11 @@ ColumnLayout {
                 opacity: 0.7
                 color: Kirigami.Theme.textColor
                 font: Kirigami.Theme.smallFont
-                text: sandboxCard.level === "none" ? qsTr("It can read your files and use the network.") : qsTr("Limited access to your files, network and devices.")
+                readonly property var sb: tab.detail.sandbox || ({})
+                text: sandboxCard.level === "none" ? qsTr("It can read your files and use the network.")
+                    : [sb.network ? qsTr("network") : qsTr("no network"),
+                       sb.home === "private" ? qsTr("private home") : sb.home === "ro" ? qsTr("reads your home") : qsTr("writes your home"),
+                       qsTr("%n shared folder(s)", "", (sb.paths || []).length)].join(" · ")
             }
             QQC2.Button {
                 flat: true
@@ -205,11 +214,11 @@ ColumnLayout {
                 Accessible.name: qsTr("Show in folder")
                 QQC2.ToolTip.visible: hovered
                 QQC2.ToolTip.text: qsTr("Show in folder")
-                onClicked: Qt.openUrlExternally("file://" + (tab.detail.path || "").replace(/\/[^\/]*$/, ""))
+                onClicked: {
+                    var dir = (tab.detail.path || "").replace(/\/[^\/]*$/, "")
+                    Qt.openUrlExternally("file://" + dir.split("/").map(encodeURIComponent).join("/"))
+                }
             }
-
-            QQC2.Label { text: qsTr("Size"); opacity: 0.7 }
-            QQC2.Label { text: Util.fmtSize(tab.detail.size); Layout.columnSpan: 2 }
 
             QQC2.Label { text: qsTr("SHA-256"); opacity: 0.7 }
             QQC2.Label { text: tab.detail.sha256 || ""; elide: Text.ElideMiddle; Layout.fillWidth: true; font.family: "monospace" }
@@ -223,6 +232,17 @@ ColumnLayout {
 
             QQC2.Label { text: qsTr("Menu entry"); opacity: 0.7 }
             QQC2.Label { text: tab.detail.desktopFile || ""; elide: Text.ElideMiddle; Layout.fillWidth: true; font.family: "monospace"; Layout.columnSpan: 2 }
+
+            QQC2.Label { text: qsTr("App ID"); opacity: 0.7 }
+            QQC2.Label {
+                text: tab.detail.id || ""
+                font.family: "monospace"
+                Layout.fillWidth: true
+                Layout.columnSpan: 2
+                QQC2.ToolTip.visible: idHover.hovered
+                QQC2.ToolTip.text: qsTr("Use this name with the appofholding command, e.g. appofholding update %1").arg(tab.detail.id || "")
+                HoverHandler { id: idHover }
+            }
 
             QQC2.Label { text: qsTr("Ownership"); opacity: 0.7; visible: !!tab.detail.externalFile }
             QQC2.Label {

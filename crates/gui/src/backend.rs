@@ -47,6 +47,15 @@ pub mod qobject {
         #[cxx_name = "startupFiles"]
         #[qinvokable]
         fn startup_files(self: &Backend) -> QString;
+        /// Started with `--tray` (from the login autostart): stay in the tray.
+        #[cxx_name = "startedInTray"]
+        #[qinvokable]
+        fn started_in_tray(self: &Backend) -> bool;
+        /// Tray and startup settings: {tray, minimiseToTray, closeToTray, notifyUpdates,
+        /// startInTray, autostart}.
+        #[cxx_name = "desktopSettings"]
+        #[qinvokable]
+        fn desktop_settings(self: &Backend) -> QString;
 
         // ---- changes: "" on success, otherwise the error message
         #[cxx_name = "saveProfile"]
@@ -117,12 +126,18 @@ pub mod qobject {
         #[cxx_name = "importRestore"]
         #[qinvokable]
         fn import_restore(self: &Backend) -> QString;
+        #[cxx_name = "setDesktopSettings"]
+        #[qinvokable]
+        fn set_desktop_settings(self: &Backend, json: &QString) -> QString;
+        /// Answer later starts of the program (see `instance`); they arrive as `activated`.
+        #[qinvokable]
+        fn listen(self: Pin<&mut Backend>);
         #[cxx_name = "setHook"]
         #[qinvokable]
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: checkAll | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun
+        // kind: notifyCheck | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -143,6 +158,10 @@ pub mod qobject {
         );
         #[qsignal]
         fn progress(self: Pin<&mut Backend>, id: &QString, fraction: f64);
+        /// Another start of the program handed over: files is a JSON array of AppImages to add,
+        /// show says whether to bring the window up.
+        #[qsignal]
+        fn activated(self: Pin<&mut Backend>, files: &QString, show: bool);
     }
 
     impl cxx_qt::Threading for Backend {}
@@ -216,12 +235,36 @@ impl qobject::Backend {
     }
 
     pub fn startup_files(&self) -> QString {
-        let files: Vec<String> = std::env::args()
-            .skip(1)
-            .filter(|a| !a.starts_with('-'))
-            .map(|a| service::local_path(&a).to_string_lossy().into_owned())
-            .collect();
-        q(&json!(files).to_string())
+        q(&json!(startup_file_list()).to_string())
+    }
+    pub fn started_in_tray(&self) -> bool {
+        started_in_tray()
+    }
+    pub fn desktop_settings(&self) -> QString {
+        json_or_err(
+            appofholding_core::Dirs::detect()
+                .map(|d| service::desktop_load(&d))
+                .map_err(|e| e.to_string()),
+        )
+    }
+    pub fn set_desktop_settings(&self, json: &QString) -> QString {
+        unit((|| {
+            let v: Value = serde_json::from_str(&s(json)).map_err(|e| e.to_string())?;
+            let dirs = appofholding_core::Dirs::detect().map_err(|e| e.to_string())?;
+            service::desktop_save(&dirs, &v, &service::gui_exe()?)
+        })())
+    }
+    pub fn listen(self: Pin<&mut Self>) {
+        let Some(path) = crate::instance::socket_path() else {
+            return;
+        };
+        let thread = self.qt_thread();
+        crate::instance::listen(&path, move |req| {
+            let files = json!(req.files).to_string();
+            let _ = thread.queue(move |mut qobj: Pin<&mut qobject::Backend>| {
+                qobj.as_mut().activated(&q(&files), req.show);
+            });
+        });
     }
 
     pub fn save_profile(&self, id: &QString, name: &QString, json: &QString) -> QString {
@@ -340,25 +383,13 @@ impl qobject::Backend {
         }))
     }
     pub fn relaunch(&self) -> QString {
-        // Running as an AppImage: start the AppImage file itself (which now holds the new
-        // version); this binary lives in its temporary mount, which goes away when we quit.
-        if let Some(image) = std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
-            return unit(
-                std::process::Command::new(image)
-                    .spawn()
-                    .map(|_| ())
-                    .map_err(|e| format!("could not start the new version: {e}")),
-            );
+        // Let the new copy take over the single-window socket instead of handing its start
+        // back to this one, which is about to quit.
+        if let Some(path) = crate::instance::socket_path() {
+            crate::instance::release(&path);
         }
-        // After a package update the running file was replaced: /proc/self/exe then reads
-        // "<path> (deleted)", and the path itself holds the new version.
-        let exe = std::fs::read_link("/proc/self/exe")
-            .or_else(|_| std::env::current_exe())
-            .map(|p| {
-                let s = p.to_string_lossy();
-                std::path::PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(&s).to_string())
-            });
-        unit(exe.map_err(|e| e.to_string()).and_then(|exe| {
+        // The AppImage file or the package's binary, which now hold the new version.
+        unit(service::gui_exe().and_then(|exe| {
             std::process::Command::new(exe)
                 .spawn()
                 .map(|_| ())
@@ -470,7 +501,7 @@ fn run_task(
     use appofholding_core::http::UreqHttp;
     let http = UreqHttp::new();
     match kind {
-        "checkAll" => with_lib(|l| service::check_all(l, &http)),
+        "notifyCheck" => with_lib(|l| service::notify_check(l, &http)),
         "check" => with_lib(|l| service::check_app(l, &http, id)),
         "update" => with_lib(|l| service::update_app(l, &http, id, progress)),
         // a = link, b = asset pattern, c = channel
@@ -512,6 +543,19 @@ fn run_task(
         }),
         other => Err(format!("unknown task '{other}'")),
     }
+}
+
+/// Files passed on the command line (e.g. by double-clicking an AppImage), as absolute paths.
+pub fn startup_file_list() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .map(|a| service::local_path(&a).to_string_lossy().into_owned())
+        .collect()
+}
+
+pub fn started_in_tray() -> bool {
+    std::env::args().skip(1).any(|a| a == service::TRAY_FLAG)
 }
 
 /// The saved colour theme, read before the interface starts (it decides the controls style).

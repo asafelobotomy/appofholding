@@ -33,6 +33,86 @@ ThemedPage {
         }
 
         Section {
+            id: deskSection
+            title: qsTr("System tray and startup")
+            subtitle: qsTr("Keep appOFholding running in the background so it can tell you when an app has a new version.")
+            readonly property var desk: applicationWindow().desk
+            readonly property bool trayOn: desk.tray === true
+            readonly property bool wayland: Qt.platform.pluginName.indexOf("wayland") >= 0
+
+            function save(key, value) {
+                var d = Object.assign({}, applicationWindow().desk)
+                delete d.error
+                d[key] = value
+                var err = page.backend.setDesktopSettings(JSON.stringify(d))
+                if (err) applicationWindow().showPassiveNotification(err, "long")
+                applicationWindow().reloadDesktop()
+            }
+
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                visible: !applicationWindow().trayAvailable
+                type: Kirigami.MessageType.Warning
+                text: qsTr("This desktop has no system tray. On GNOME, install the AppIndicator extension to use these options.")
+            }
+            QQC2.Switch {
+                text: qsTr("Show an icon in the system tray")
+                checked: deskSection.trayOn
+                onToggled: deskSection.save("tray", checked)
+            }
+            ColumnLayout {
+                Layout.leftMargin: Kirigami.Units.gridUnit
+                enabled: deskSection.trayOn
+                spacing: 0
+                QQC2.CheckBox {
+                    text: qsTr("Minimise to the tray")
+                    enabled: !deskSection.wayland
+                    checked: deskSection.desk.minimiseToTray === true
+                    onToggled: deskSection.save("minimiseToTray", checked)
+                }
+                QQC2.Label {
+                    visible: deskSection.wayland
+                    text: qsTr("Wayland does not tell programs when they are minimised; use “close to the tray” instead.")
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font: Kirigami.Theme.smallFont
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
+                }
+                QQC2.CheckBox {
+                    text: qsTr("Close to the tray (keep running when the window is closed)")
+                    checked: deskSection.desk.closeToTray === true
+                    onToggled: deskSection.save("closeToTray", checked)
+                }
+                QQC2.CheckBox {
+                    text: qsTr("Notify me when an app update is released")
+                    checked: deskSection.desk.notifyUpdates === true
+                    onToggled: deskSection.save("notifyUpdates", checked)
+                }
+                QQC2.Label {
+                    text: qsTr("Checks every few hours while appOFholding runs. Each new version is announced once, for apps set to “Tell me”.")
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font: Kirigami.Theme.smallFont
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
+                }
+            }
+            QQC2.Switch {
+                text: qsTr("Launch at startup")
+                checked: deskSection.desk.autostart === true
+                onToggled: deskSection.save("autostart", checked)
+            }
+            QQC2.CheckBox {
+                Layout.leftMargin: Kirigami.Units.gridUnit
+                text: qsTr("Start in the tray, without opening the window")
+                enabled: deskSection.trayOn && deskSection.desk.autostart === true
+                checked: deskSection.desk.startInTray === true
+                onToggled: deskSection.save("startInTray", checked)
+            }
+        }
+
+        Section {
             title: qsTr("Automatic update checks")
             subtitle: qsTr("A background timer checks your apps for updates and installs the ones set to update automatically. Apps set to notify get one notification per new version.")
 

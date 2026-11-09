@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- **System tray.** Settings → *System tray and startup* adds a tray icon (left click shows or
+  hides the window; its menu checks for updates or quits), with **minimise to the tray** and
+  **close to the tray**. Wayland does not tell programs they were minimised, so there only
+  closing to the tray is offered.
+- **Launch at startup**, optionally straight into the tray (an XDG autostart entry that runs
+  `appofholding-gui --tray`).
+- **Update notifications from the tray.** While the tray icon is up, appOFholding checks every
+  few hours and shows a desktop notification when an app set to *Tell me* has a new release;
+  clicking it opens that app. Each version is announced once, shared with the background timer,
+  so the two never both announce it.
+- **One window.** Starting appOFholding while it already runs (for example from the menu while
+  it sits in the tray) shows the running window, and passes it any AppImages to add.
+- The app inspector was tidied:
+  - *Updates*: the source form now starts filled in with the current link, file pattern and
+    channel, so changing one of them no longer means retyping the link; a specific tag (such as
+    `nightly`) can be followed from the window; commands to run before and after an update moved
+    here from *Launch*; previous versions can be rolled back to even after the source was removed;
+    a second progress bar under the one at the top was removed.
+  - *Launch*: the profile picker has its own card instead of sitting inside *Quick fixes*; Save
+    and Revert cover the quick fixes too; the command preview can be copied and no longer needs a
+    Refresh button.
+  - *Sandbox*: with protection off, the greyed-out permission cards are hidden; the rest is
+    grouped into *What the app may use* and *Files* (home folder and shared folders).
+  - Unsaved launch or sandbox changes are shown in a bar at the bottom of the page, whichever tab
+    is open, instead of at the top of one tab.
+  - *Overview*: the Launch summary counts every option (working folder, unpacking, root) and says
+    when the app runs as root; the Sandbox summary says what is allowed; the File card shows the
+    app's id for the command line, and "Show in folder" works for folders with unusual names.
+  - The duplicate *Open* action in the page header was removed (it is the button by the name).
+- The interface now creates a Qt Widgets application, so the tray icon also works on panels that
+  only offer the older XEmbed tray. Packages gain a dependency on Qt Labs Platform (part of
+  `qt6-declarative` on Arch and Fedora; `qml6-module-qt-labs-platform` on Debian/Ubuntu).
+
 ## 0.5.0
 
 - Suggestions: the Overview tab (and `appofholding suggest`) now points out simple improvements

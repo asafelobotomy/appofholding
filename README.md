@@ -18,6 +18,9 @@ tool (`appofholding`) that share one library.
 - **Updates you can trust.** Explicit status for every check (never a silent "checking…"), checksum
   and size verification, resumable downloads, rollback to previous versions, per-app policy
   (automatic / notify / manual / pinned), skip-this-version, and a background timer.
+- **Lives in the tray if you want it to.** Optional system tray icon, minimise or close to the
+  tray, launch at login (optionally straight into the tray), and a desktop notification when an
+  app has a new release. Starting appOFholding again brings up the running window.
 - **Your launch options survive updates.** Arguments, environment, command prefix, presets such
   as `electron-wayland` or `no-sandbox`, extra profiles in the right-click menu, and hooks — all
   stored in a database, never in the generated `.desktop` file.
@@ -99,6 +102,8 @@ Set `APPOFHOLDING_ROOT=/some/folder` to run everything inside a throwaway direct
 | Database, kept versions, private homes | `~/.local/share/appofholding` |
 | Unpacked copies for sandboxed apps | `~/.cache/appofholding/extracted` |
 | Background timer | `~/.config/systemd/user/appofholding-update.{service,timer}` |
+| Launch at login | `~/.config/autostart/io.github.appofholding.desktop` |
+| Window and tray settings | `~/.config/appofholding/gui-*` |
 
 ## Development
 

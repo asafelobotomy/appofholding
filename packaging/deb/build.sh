@@ -22,7 +22,7 @@ Version: $version
 Architecture: $arch
 Maintainer: asafelobotomy <213836723+asafelobotomy@users.noreply.github.com>
 Installed-Size: $size
-Depends: libc6, libstdc++6, bubblewrap, xdg-dbus-proxy, qml6-module-org-kde-kirigami, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-dialogs, qml6-module-qtquick-window, qml6-module-org-kde-desktop
+Depends: libc6, libstdc++6, bubblewrap, xdg-dbus-proxy, qml6-module-org-kde-kirigami, qml6-module-qtquick-controls, qml6-module-qtquick-layouts, qml6-module-qtquick-dialogs, qml6-module-qtquick-window, qml6-module-qt-labs-platform, qml6-module-org-kde-desktop, libqt6widgets6
 Recommends: zsync, libnotify-bin
 Section: utils
 Priority: optional
