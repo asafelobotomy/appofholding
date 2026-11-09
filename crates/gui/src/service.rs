@@ -306,17 +306,21 @@ pub fn set_source(lib: &Library, id: &str, input: &str, pattern: &str, channel: 
     lib.set_source(id, &parsed.source).map_err(e)
 }
 
-/// Run the app detached from the GUI, as the menu entry would.
+/// Run the app detached from the GUI, as the menu entry would. A thread waits
+/// on it, so an app that exits never lingers as a zombie while the GUI runs.
 pub fn launch_app(lib: &Library, id: &str) -> Res<()> {
     lib.get(id).map_err(e)?;
-    Command::new(&lib.exec_bin)
+    let mut child = Command::new(&lib.exec_bin)
         .args(["run", id])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map(|_| ())
-        .map_err(|err| format!("could not start {}: {err}", lib.exec_bin.display()))
+        .map_err(|err| format!("could not start {}: {err}", lib.exec_bin.display()))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 pub fn remove_app(lib: &Library, id: &str, purge: bool) -> Res<()> {
