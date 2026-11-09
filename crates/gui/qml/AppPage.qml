@@ -36,12 +36,8 @@ ThemedPage {
         function onRevisionChanged() { page.load() }
     }
 
+    // "Open" and "Update" are the buttons beside the app's name.
     actions: [
-        Kirigami.Action {
-            text: qsTr("Open")
-            icon.name: "media-playback-start"
-            onTriggered: page.openApp()
-        },
         Kirigami.Action {
             text: qsTr("Remove…")
             icon.name: "edit-delete"
@@ -174,8 +170,40 @@ ThemedPage {
             onGoToTab: (i) => tabs.currentIndex = i
         }
         SourceSection { visible: tabs.currentIndex === 1 && !!page.d.id; detail: page.d; appId: page.appId; backend: page.backend; Layout.fillWidth: true }
-        LaunchSection { visible: tabs.currentIndex === 2 && !!page.d.id; detail: page.d; appId: page.appId; backend: page.backend; Layout.fillWidth: true }
-        SandboxSection { visible: tabs.currentIndex === 3 && !!page.d.id; detail: page.d; appId: page.appId; backend: page.backend; Layout.fillWidth: true }
+        LaunchSection { id: launchTab; visible: tabs.currentIndex === 2 && !!page.d.id; detail: page.d; appId: page.appId; backend: page.backend; Layout.fillWidth: true }
+        SandboxSection { id: sandboxTab; visible: tabs.currentIndex === 3 && !!page.d.id; detail: page.d; appId: page.appId; backend: page.backend; Layout.fillWidth: true }
+    }
+
+    // Unsaved launch or sandbox changes stay in sight below the page, whichever tab is open
+    // and however far it is scrolled.
+    footer: QQC2.Control {
+        visible: launchTab.dirty || sandboxTab.dirty
+        padding: Kirigami.Units.smallSpacing
+        contentItem: ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                visible: launchTab.dirty
+                type: Kirigami.MessageType.Information
+                text: qsTr("Unsaved launch settings")
+                actions: [
+                    Kirigami.Action { text: qsTr("Save"); icon.name: "document-save"; onTriggered: launchTab.save() },
+                    Kirigami.Action { text: qsTr("Revert"); icon.name: "edit-undo"; onTriggered: launchTab.revert() },
+                    Kirigami.Action { text: qsTr("Show"); icon.name: "go-next"; visible: tabs.currentIndex !== 2; onTriggered: tabs.currentIndex = 2 }
+                ]
+            }
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                visible: sandboxTab.dirty
+                type: Kirigami.MessageType.Information
+                text: qsTr("Unsaved sandbox settings")
+                actions: [
+                    Kirigami.Action { text: qsTr("Save"); icon.name: "document-save"; onTriggered: sandboxTab.save() },
+                    Kirigami.Action { text: qsTr("Revert"); icon.name: "edit-undo"; onTriggered: sandboxTab.revert() },
+                    Kirigami.Action { text: qsTr("Show"); icon.name: "go-next"; visible: tabs.currentIndex !== 3; onTriggered: tabs.currentIndex = 3 }
+                ]
+            }
+        }
     }
 
     QQC2.Dialog {

@@ -53,23 +53,13 @@ ColumnLayout {
         if (detail.sandbox) s = JSON.parse(JSON.stringify(detail.sandbox))
     }
 
-    // ---- unsaved changes
-    Kirigami.InlineMessage {
-        Layout.fillWidth: true
-        visible: sec.dirty
-        type: Kirigami.MessageType.Information
-        text: qsTr("You have unsaved sandbox changes.")
-        actions: [
-            Kirigami.Action { text: qsTr("Save"); icon.name: "document-save"; onTriggered: sec.save() },
-            Kirigami.Action { text: qsTr("Revert"); icon.name: "edit-undo"; onTriggered: sec.revert() }
-        ]
-    }
-
     // ---- protection level
     SectionCard {
         title: qsTr("Protection")
         iconName: "security-high"
-        subtitle: qsTr("Limit what this app can see and do. A sandboxed app runs from an unpacked copy with its own private home folder.")
+        subtitle: sec.enabledSandbox
+            ? qsTr("Limits what this app can see and do. It runs from an unpacked copy with its own private home folder.")
+            : qsTr("Off: the app runs like any other program, with access to your files, network and devices. Pick Standard or Strict to limit it.")
 
         RowLayout {
             Layout.fillWidth: true
@@ -133,11 +123,11 @@ ColumnLayout {
         }
     }
 
-    // ---- permissions
+    // ---- permissions (only meaningful with a sandbox)
     SectionCard {
+        visible: sec.enabledSandbox
         title: qsTr("What the app may use")
         iconName: "preferences-system-privacy"
-        subtitle: sec.enabledSandbox ? "" : qsTr("Turn on Standard or Strict protection to choose.")
 
         Repeater {
             model: [
@@ -151,7 +141,6 @@ ColumnLayout {
                 required property var modelData
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.largeSpacing
-                opacity: sec.enabledSandbox ? 1 : 0.5
                 Kirigami.Icon {
                     source: modelData.icon
                     Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
@@ -165,83 +154,83 @@ ColumnLayout {
                     QQC2.Label { text: modelData.text; opacity: 0.7; font: Kirigami.Theme.smallFont; Layout.fillWidth: true; elide: Text.ElideRight }
                 }
                 QQC2.Switch {
-                    enabled: sec.enabledSandbox
                     checked: !!sec.s[modelData.key]
                     Accessible.name: modelData.label
                     onToggled: sec.change(modelData.key, checked)
                 }
             }
         }
-    }
 
-    // ---- home folder + desktop services
-    SectionCard {
-        title: qsTr("Files and desktop")
-        iconName: "folder-home"
-
-        GridLayout {
-            columns: 2
-            columnSpacing: Kirigami.Units.largeSpacing
-            rowSpacing: Kirigami.Units.smallSpacing
+        Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.smallSpacing }
+        RowLayout {
             Layout.fillWidth: true
-            opacity: sec.enabledSandbox ? 1 : 0.5
-
-            QQC2.Label { text: qsTr("Home folder"); opacity: 0.8 }
-            QQC2.ComboBox {
-                enabled: sec.enabledSandbox
-                readonly property var keys: ["private", "ro", "rw"]
-                Layout.fillWidth: true
-                Layout.maximumWidth: Kirigami.Units.gridUnit * 22
-                model: [qsTr("Its own empty folder"), qsTr("Mine, read-only"), qsTr("Mine, read and write")]
-                currentIndex: Math.max(0, keys.indexOf(sec.s.home))
-                onActivated: (i) => sec.change("home", keys[i])
+            spacing: Kirigami.Units.largeSpacing
+            Kirigami.Icon {
+                source: "preferences-desktop"
+                Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
+                Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
             }
-            QQC2.Label { text: qsTr("Desktop services"); opacity: 0.8 }
+            QQC2.Label { text: qsTr("Desktop services"); font.weight: Font.DemiBold; Layout.fillWidth: true }
             QQC2.ComboBox {
-                enabled: sec.enabledSandbox
                 readonly property var keys: ["off", "filtered", "full"]
-                Layout.fillWidth: true
-                Layout.maximumWidth: Kirigami.Units.gridUnit * 22
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 18
                 model: [qsTr("None"), qsTr("File dialogs, notifications, tray icon"), qsTr("Everything (unsafe)")]
                 currentIndex: Math.max(0, keys.indexOf(sec.s.bus))
                 onActivated: (i) => sec.change("bus", keys[i])
-            }
-            Item { width: 1; height: 1 }
-            QQC2.CheckBox {
-                enabled: sec.enabledSandbox
-                text: qsTr("Fix Chromium/Electron apps (adds --no-sandbox)")
-                checked: !!sec.s.chromium
-                onToggled: sec.change("chromium", checked)
+                Accessible.name: qsTr("Desktop services")
             }
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true
-            visible: sec.enabledSandbox && sec.s.home === "rw"
-            type: Kirigami.MessageType.Warning
-            text: qsTr("With a writable home folder the app can change any of your files.")
-        }
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            visible: sec.enabledSandbox && sec.s.bus === "full"
+            visible: sec.s.bus === "full"
             type: Kirigami.MessageType.Warning
             text: qsTr("With full desktop services the app can talk to every program on your session.")
         }
+        QQC2.CheckBox {
+            text: qsTr("Fix Chromium/Electron apps (adds --no-sandbox)")
+            checked: !!sec.s.chromium
+            onToggled: sec.change("chromium", checked)
+        }
     }
 
-    // ---- shared folders
+    // ---- files: home folder and shared folders
     SectionCard {
-        title: qsTr("Folders the app may use")
-        iconName: "folder-add"
-        subtitle: sec.enabledSandbox ? qsTr("Folders outside its private home that it can open.") : ""
+        visible: sec.enabledSandbox
+        title: qsTr("Files")
+        iconName: "folder-home"
 
-        Text {
-            visible: sec.enabledSandbox && (sec.s.paths || []).length === 0
-            text: qsTr("None.")
-            color: Kirigami.Theme.textColor
-            opacity: 0.6
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Kirigami.Units.largeSpacing
+            QQC2.Label { text: qsTr("Home folder"); font.weight: Font.DemiBold; Layout.fillWidth: true }
+            QQC2.ComboBox {
+                readonly property var keys: ["private", "ro", "rw"]
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 18
+                model: [qsTr("Its own empty folder"), qsTr("Mine, read-only"), qsTr("Mine, read and write")]
+                currentIndex: Math.max(0, keys.indexOf(sec.s.home))
+                onActivated: (i) => sec.change("home", keys[i])
+                Accessible.name: qsTr("Home folder")
+            }
+        }
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: sec.s.home === "rw"
+            type: Kirigami.MessageType.Warning
+            text: qsTr("With a writable home folder the app can change any of your files.")
+        }
+
+        Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.smallSpacing }
+        QQC2.Label { text: qsTr("Shared folders"); font.weight: Font.DemiBold }
+        QQC2.Label {
+            text: (sec.s.paths || []).length === 0
+                ? qsTr("None. Share a folder to let the app open files outside its home.")
+                : qsTr("The app can open these as well as its home folder.")
+            opacity: 0.7
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
         }
         Repeater {
-            model: sec.enabledSandbox ? (sec.s.paths || []) : []
+            model: sec.s.paths || []
             RowLayout {
                 required property var modelData
                 required property int index
@@ -271,7 +260,6 @@ ColumnLayout {
             }
         }
         QQC2.Button {
-            visible: sec.enabledSandbox
             text: qsTr("Share a folder…")
             icon.name: "folder-add"
             onClicked: folderDialog.open()

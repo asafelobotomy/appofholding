@@ -1,10 +1,28 @@
 mod backend;
+mod instance;
 mod service;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QQuickStyle, QString, QUrl};
+use cxx_qt_lib::{QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 
 unsafe extern "C" {
     fn appofholding_set_palette(which: i32);
+    fn appofholding_app_new(argc: i32, argv: *mut *mut std::ffi::c_char);
+    fn appofholding_app_exec() -> i32;
+}
+
+/// Create the (widgets) application object from this process's arguments; see app.cpp.
+fn create_application() {
+    use std::os::unix::ffi::OsStringExt;
+    // Qt keeps pointers into argv for the life of the program, so these are never freed.
+    let args: Vec<*mut std::ffi::c_char> = std::env::args_os()
+        .filter_map(|a| std::ffi::CString::new(a.into_vec()).ok())
+        .map(std::ffi::CString::into_raw)
+        .chain(std::iter::once(std::ptr::null_mut()))
+        .collect();
+    let argc = (args.len() - 1) as i32;
+    let argv = Box::leak(args.into_boxed_slice()).as_mut_ptr();
+    // SAFETY: argv holds argc valid C strings and a final null, and is never freed.
+    unsafe { appofholding_app_new(argc, argv) };
 }
 
 /// Our own colour themes replace the application palette; "system" leaves the desktop's alone.
@@ -48,9 +66,25 @@ fn forward_cli_commands() {
     std::process::exit(127);
 }
 
+/// When appOFholding already runs (often hidden in the tray), show that window instead of
+/// opening a second one, and give it any files this start was asked to open.
+fn hand_over_to_running_copy() {
+    let Some(path) = instance::socket_path() else {
+        return;
+    };
+    let req = instance::Request {
+        files: backend::startup_file_list(),
+        show: !backend::started_in_tray(),
+    };
+    if instance::forward(&path, &req) {
+        std::process::exit(0);
+    }
+}
+
 fn main() {
     forward_cli_commands();
-    let mut app = QGuiApplication::new();
+    hand_over_to_running_copy();
+    create_application();
     // A custom palette needs a style that obeys it; the desktop style follows the system.
     let themed = apply_theme();
     QQuickStyle::set_style(&QString::from(if themed {
@@ -64,7 +98,8 @@ fn main() {
             "qrc:/qt/qml/io/github/appofholding/qml/Main.qml",
         ));
     }
-    if let Some(a) = app.as_mut() {
-        a.exec();
-    }
+    // SAFETY: the application object exists (create_application).
+    let code = unsafe { appofholding_app_exec() };
+    drop(engine);
+    std::process::exit(code);
 }

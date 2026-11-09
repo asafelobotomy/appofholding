@@ -3,6 +3,7 @@ import QtQuick.Window
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import Qt.labs.platform as Platform
 import org.kde.kirigami as Kirigami
 import io.github.appofholding
 
@@ -14,6 +15,8 @@ Kirigami.ApplicationWindow {
     height: Kirigami.Units.gridUnit * 38
     minimumWidth: Kirigami.Units.gridUnit * 22
     minimumHeight: Kirigami.Units.gridUnit * 20
+    // Shown from Component.onCompleted, unless it starts in the tray.
+    visible: false
 
     property var apps: []
     // Bumped whenever the library changed, so open pages reload themselves.
@@ -30,17 +33,156 @@ Kirigami.ApplicationWindow {
     // Also reaches the dialogs, which live on the window rather than on a page.
     readonly property ThemeBindings themeBindings: ThemeBindings { target: root; p: root.themePalette }
 
+    // Tray and startup settings (see SettingsPage); reloaded when they change.
+    property var desk: Util.parse(backend.desktopSettings())
+    // Whether the desktop has a system tray to put the icon in (not on plain GNOME). The tray
+    // does not announce changes to this, so it is read at start and while waiting for the tray.
+    property bool trayAvailable: false
+    readonly property bool inTray: desk.tray === true && trayAvailable
+    // Updates the background checks have announced, for the tray's tooltip.
+    property int updateCount: 0
+
+    function reloadDesktop() {
+        var d = Util.parse(backend.desktopSettings())
+        root.desk = d.error ? ({}) : d
+    }
+
     Backend { id: backend }
+
+    // ---- the window and the tray
+
+    function showWindow() {
+        if (root.visibility === Window.Minimized) root.showNormal()
+        else root.show()
+        root.raise()
+        root.requestActivate()
+    }
+
+    function hideToTray() {
+        root.hide()
+    }
+
+    // Closing the window keeps the program in the tray when asked to.
+    onClosing: (close) => {
+        if (root.inTray && root.desk.closeToTray) {
+            close.accepted = false
+            root.hideToTray()
+        }
+    }
+
+    // Minimising hides the window in the tray. Wayland never tells a window it was minimised,
+    // so there this only works through "close to tray" (the Settings page says so).
+    onVisibilityChanged: (v) => {
+        if (v === Window.Minimized && root.inTray && root.desk.minimiseToTray) root.hideToTray()
+    }
+
+    Platform.SystemTrayIcon {
+        id: tray
+        visible: root.desk.tray === true
+        icon.name: "io.github.appofholding"
+        icon.source: "qrc:/appofholding/app-icon.svg"
+        tooltip: root.updateCount > 0 ? qsTr("appOFholding — %n update(s) available", "", root.updateCount) : "appOFholding"
+
+        onActivated: (reason) => {
+            if (reason === Platform.SystemTrayIcon.Context) return
+            if (root.visible && root.active) root.hideToTray()
+            else root.showWindow()
+        }
+        onMessageClicked: {
+            root.showWindow()
+            if (root.announcedApp) root.openApp(root.announcedApp)
+        }
+
+        menu: Platform.Menu {
+            Platform.MenuItem {
+                text: root.visible ? qsTr("Hide appOFholding") : qsTr("Show appOFholding")
+                onTriggered: root.visible ? root.hideToTray() : root.showWindow()
+            }
+            Platform.MenuItem {
+                text: qsTr("Check for updates")
+                enabled: !root.working
+                onTriggered: root.checkAll()
+            }
+            Platform.MenuSeparator {}
+            Platform.MenuItem {
+                text: qsTr("Quit")
+                onTriggered: Qt.quit()
+            }
+        }
+    }
+
+    // While the tray icon is up, check for updates now and then and announce new versions.
+    readonly property bool watchUpdates: root.inTray && root.desk.notifyUpdates === true
+    // The app a single-update announcement is about, opened when the message is clicked.
+    property string announcedApp
+
+    function backgroundCheck() {
+        if (root.working) {
+            retryCheck.restart()   // something else is running; try again shortly
+            return
+        }
+        root.manualCheck = false
+        backend.start("notifyCheck", "", "", "", "")
+    }
+
+    Timer { id: firstCheck; interval: 2 * 60 * 1000; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
+    Timer { interval: 3 * 3600 * 1000; repeat: true; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
+    Timer { id: retryCheck; interval: 5 * 60 * 1000; onTriggered: if (root.watchUpdates) root.backgroundCheck() }
+
+    function announce(fresh) {
+        if (fresh.length === 0 || !tray.visible) return
+        var title, body
+        if (fresh.length === 1) {
+            root.announcedApp = fresh[0].id
+            title = qsTr("%1 %2 is available").arg(fresh[0].name).arg(fresh[0].version)
+            body = qsTr("A new version of %1 has been released. Click to open it in appOFholding.").arg(fresh[0].name)
+        } else {
+            root.announcedApp = ""
+            title = qsTr("%n app update(s) available", "", fresh.length)
+            var lines = []
+            for (var i = 0; i < fresh.length; i++) lines.push(fresh[i].name + " " + fresh[i].version)
+            body = lines.join("\n")
+        }
+        tray.showMessage(title, body, Platform.SystemTrayIcon.Information, 10000)
+    }
+
+    // Started from the login autostart with --tray: the tray may come up a little after us, so
+    // wait for it briefly before giving up and opening the window.
+    Timer {
+        id: waitForTray
+        interval: 500
+        repeat: true
+        property int tries: 0
+        onTriggered: {
+            waitForTray.tries++
+            root.trayAvailable = tray.available
+            if (root.trayAvailable || waitForTray.tries >= 30) {
+                waitForTray.stop()
+                if (!root.inTray) root.showWindow()
+            }
+        }
+    }
 
     function reload() {
         var r = Util.parse(backend.apps())
         apps = r.error ? [] : r
+        updateCount = countUpdates(apps)
         if (r.error) showPassiveNotification(r.error)
         revision++
     }
 
+    function countUpdates(list) {
+        var n = 0
+        for (var i = 0; i < list.length; i++) if (list[i].status === "update-available") n++
+        return n
+    }
+
+    // Asked for by the user (from the window or the tray menu) rather than the background timer.
+    property bool manualCheck: false
+
     function checkAll() {
-        backend.start("checkAll", "", "", "", "")
+        root.manualCheck = true
+        backend.start("notifyCheck", "", "", "", "")
     }
 
     function openApp(id) {
@@ -50,6 +192,13 @@ Kirigami.ApplicationWindow {
 
     Component.onCompleted: {
         reload()
+        backend.listen()
+        root.trayAvailable = tray.available
+        if (backend.startedInTray() && root.desk.tray === true) {
+            if (!root.trayAvailable) waitForTray.start()
+        } else {
+            root.showWindow()
+        }
         // Files handed to us by the desktop (double-click, "Open with", drag onto the icon).
         var files = Util.parse(backend.startupFiles())
         for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i], "", "")
@@ -63,6 +212,13 @@ Kirigami.ApplicationWindow {
             var p = Object.assign({}, root.progress)
             p[id] = fraction
             root.progress = p
+        }
+
+        // Someone started appOFholding again: show this window instead of a second one.
+        function onActivated(files, show) {
+            if (show) root.showWindow()
+            var list = Util.parse(files)
+            for (var i = 0; i < list.length; i++) backend.start("addFile", "", list[i], "", "")
         }
 
         function onFinished(kind, id, ok, payload) {
@@ -87,12 +243,23 @@ Kirigami.ApplicationWindow {
                     root.showPassiveNotification(data.instructions || qsTr("Nothing to update"), "long")
                 }
                 break
-            case "checkAll":
+            case "notifyCheck":
                 root.reload()
-                if (ok) {
-                    var n = 0
-                    for (var i = 0; i < data.length; i++) if (data[i].status === "update-available") n++
-                    root.showPassiveNotification(n > 0 ? qsTr("%1 update(s) available").arg(n) : qsTr("Everything is up to date"))
+                var manual = root.manualCheck
+                root.manualCheck = false
+                if (!ok) {
+                    if (manual) root.showPassiveNotification(payload, "long")
+                    break
+                }
+                var n = root.countUpdates(data.results)
+                var summary = n > 0 ? qsTr("%n update(s) available", "", n) : qsTr("Everything is up to date")
+                if (root.visible && root.active) {
+                    // The user is looking at the window: say it here, not on the desktop.
+                    if (manual || data.fresh.length > 0) root.showPassiveNotification(summary)
+                } else if (data.fresh.length > 0) {
+                    root.announce(data.fresh)
+                } else if (manual && tray.visible) {
+                    tray.showMessage("appOFholding", summary, Platform.SystemTrayIcon.Information, 5000)
                 }
                 break
             case "check":
@@ -171,6 +338,13 @@ Kirigami.ApplicationWindow {
                     while (pageStack.depth > 1) pageStack.pop()
                     pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
                 }
+            },
+            // Closing the window only hides it then, so offer a way out here too.
+            Kirigami.Action {
+                text: qsTr("Quit")
+                icon.name: "application-exit"
+                visible: root.inTray && root.desk.closeToTray === true
+                onTriggered: Qt.quit()
             }
         ]
     }

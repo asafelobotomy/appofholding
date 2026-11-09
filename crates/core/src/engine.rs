@@ -77,6 +77,14 @@ pub struct CheckState {
     pub report: Option<Report>,
 }
 
+/// A new version the user has not been told about (see `take_unannounced_updates`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUpdate {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Updated {
@@ -670,6 +678,42 @@ impl Library {
         Ok(out)
     }
 
+    /// Updates found by earlier checks that the user has not been told about yet, now marked as
+    /// told. Shares its record with `run_scheduled`, so each new version is announced once,
+    /// whichever of the background timer and the running app sees it first. Only apps set to
+    /// `notify` are included: `auto` apps install themselves, `manual` and `pinned` stay quiet,
+    /// and a skipped version is never announced.
+    pub fn take_unannounced_updates(&self) -> Result<Vec<NewUpdate>> {
+        let mut out = Vec::new();
+        for rec in self.db.list_sources()? {
+            if rec.policy != Policy::Notify
+                || rec.last_status.as_deref().and_then(Status::parse)
+                    != Some(Status::UpdateAvailable)
+            {
+                continue;
+            }
+            let Some(version) = rec.last_latest.clone() else {
+                continue;
+            };
+            if rec.skipped_version.as_deref() == Some(version.as_str())
+                || rec.notified_version.as_deref() == Some(version.as_str())
+            {
+                continue;
+            }
+            let name = self
+                .get(&rec.app_id)
+                .map(|a| a.name)
+                .unwrap_or_else(|_| rec.app_id.clone());
+            self.db.set_notified(&rec.app_id, Some(&version))?;
+            out.push(NewUpdate {
+                id: rec.app_id,
+                name,
+                version,
+            });
+        }
+        Ok(out)
+    }
+
     fn scheduled_one(
         &self,
         http: &dyn Http,
@@ -1109,6 +1153,40 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(files, 1, "pruned versions are deleted from disk");
+    }
+
+    #[test]
+    fn unannounced_updates_are_handed_out_once_and_shared_with_the_timer() {
+        let e = env();
+        installed(&e);
+        let http = github("2.0.0");
+        assert!(e.lib.take_unannounced_updates().unwrap().is_empty());
+
+        e.lib.check(&http, "foo-app").unwrap();
+        let fresh = e.lib.take_unannounced_updates().unwrap();
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].id, "foo-app");
+        assert_eq!(fresh[0].version, "v2.0.0");
+        assert!(
+            e.lib.take_unannounced_updates().unwrap().is_empty(),
+            "told once"
+        );
+
+        // The timer saw it as told too.
+        let notes = Recorder::default();
+        e.lib.run_scheduled(&http, &notes).unwrap();
+        assert!(notes.0.borrow().is_empty());
+
+        // A skipped version, and apps that are not set to notify, stay quiet.
+        let http3 = github("3.0.0");
+        e.lib.check(&http3, "foo-app").unwrap();
+        e.lib.skip_latest("foo-app").unwrap();
+        assert!(e.lib.take_unannounced_updates().unwrap().is_empty());
+        e.lib.clear_skip("foo-app").unwrap();
+        e.lib.set_policy("foo-app", Policy::Manual).unwrap();
+        assert!(e.lib.take_unannounced_updates().unwrap().is_empty());
+        e.lib.set_policy("foo-app", Policy::Notify).unwrap();
+        assert_eq!(e.lib.take_unannounced_updates().unwrap().len(), 1);
     }
 
     #[test]

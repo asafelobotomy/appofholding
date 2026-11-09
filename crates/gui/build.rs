@@ -137,7 +137,9 @@ fn main() {
     .qrc("qml/resources/resources.qrc")
     .qt_module("Quick")
     .qt_module("QuickControls2")
+    .qt_module("Widgets")
     .file("src/backend.rs")
     .cpp_file("src/theme.cpp")
+    .cpp_file("src/app.cpp")
     .build();
 }
