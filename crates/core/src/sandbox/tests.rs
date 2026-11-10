@@ -674,7 +674,9 @@ fn strict_sandbox_really_hides_files_environment_network_and_processes() {
     let secret_read = field(&out, "SECRET_FILE");
     assert!(
         secret_read.starts_with("cat:") && !secret_read.contains("TOP-SECRET"),
-        "...your real files are not there: {secret_read}"
+        "...your real files are not there (the read returned {} bytes, starting with cat: {})",
+        secret_read.len(),
+        secret_read.starts_with("cat:")
     );
     assert_eq!(field(&out, "SECRET_ENV"), "unset");
     assert_eq!(
