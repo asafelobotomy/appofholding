@@ -12,6 +12,7 @@ appofholding-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4.6.11"
 clap_mangen = "0.3.3"
+serde_json = "1.0.154"
 
 [dev-dependencies]
 appofholding-core = { path = "../core", features = ["fixtures"] }

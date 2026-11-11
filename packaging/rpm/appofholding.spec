@@ -43,6 +43,7 @@ make install PREFIX=%{_prefix} DESTDIR=%{buildroot} PROFILE=release
 %{_datadir}/zsh/site-functions/_appofholding
 %{_datadir}/fish/vendor_completions.d/appofholding.fish
 %{_datadir}/licenses/appofholding/
+%{_datadir}/uq/
 
 %changelog
 * Fri Nov 06 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.5.0-1

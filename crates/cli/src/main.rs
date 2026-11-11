@@ -11,6 +11,7 @@ use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
 use appofholding_core::http::UreqHttp;
 use appofholding_core::import;
 use appofholding_core::launch;
+use appofholding_core::notify::Notifier;
 use appofholding_core::notify::NotifySend;
 use appofholding_core::profiles::{self, LaunchCtx};
 use appofholding_core::sandbox::{self, Bus, HomeAccess, Level, PathGrant};
@@ -19,8 +20,11 @@ use appofholding_core::selfupdate;
 use appofholding_core::source::Policy;
 use appofholding_core::source::{self, Channel, Source};
 use appofholding_core::version::{Installed, Status};
-use appofholding_core::{AddOptions, Dirs, FilePolicy, Install, Library, inspect};
+use appofholding_core::{
+    AddOptions, AppRecord, Dirs, FilePolicy, Install, Library, SourceRecord, inspect,
+};
 use clap::{CommandFactory, Parser, Subcommand};
+use serde_json::json;
 
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
 #[derive(Parser)]
@@ -54,7 +58,11 @@ enum Cmd {
         post_install: Option<String>,
     },
     /// List apps in the library.
-    List,
+    List {
+        /// Print JSON (with each app's update policy and last check) instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show details about an AppImage file or a library app id.
     Info { target: String },
     /// Remove an app: its menu entry, icon and the AppImage (but see --keep-file; an AppImage that
@@ -75,7 +83,18 @@ enum Cmd {
     #[command(subcommand)]
     Source(SourceCmd),
     /// Check apps for updates (all apps with a source, or just ID).
-    Check { id: Option<String> },
+    Check {
+        id: Option<String>,
+        /// The app whose menu entry has this desktop id (appofholding-<id>.desktop), instead of ID.
+        #[arg(long, value_name = "DESKTOP_ID", conflicts_with = "id")]
+        desktop_id: Option<String>,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// Also show the result as a desktop notification.
+        #[arg(long)]
+        notify: bool,
+    },
     /// Download and install newer versions (all apps with a source, or just ID).
     Update {
         id: Option<String>,
@@ -745,7 +764,11 @@ enum ScheduleCmd {
     /// Disable background update checks.
     Remove,
     /// Show whether the timer is installed and when it runs next.
-    Status,
+    Status {
+        /// Print JSON ({"installed", "interval"}) instead.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1331,7 +1354,15 @@ fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
                 }
             );
         }
-        ScheduleCmd::Status => {
+        ScheduleCmd::Status { json: true } => {
+            let (svc, timer) = schedule::unit_paths(&dirs);
+            let installed = svc.exists() && timer.exists();
+            println!(
+                "{}",
+                schedule_json(installed, schedule::installed_interval(&dirs))
+            );
+        }
+        ScheduleCmd::Status { json: false } => {
             let (svc, timer) = schedule::unit_paths(&dirs);
             println!(
                 "units:  {}",
@@ -1456,6 +1487,133 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
     Ok(())
 }
 
+// ---------- JSON output (`list --json`, `check --json`, `schedule status --json`) ----------
+//
+// For scripts and desktop integrations (uq/ in this repository). Field names are snake_case and
+// stable; `version` changes only if a field changes meaning.
+
+/// Whether a status counts as an update the user can act on: available, not the version they
+/// chose to skip, and not pinned.
+fn counts_as_update(
+    status: Option<&str>,
+    latest: Option<&str>,
+    src: Option<&SourceRecord>,
+) -> bool {
+    status == Some(Status::UpdateAvailable.as_str())
+        && src.is_none_or(|s| {
+            s.policy != Policy::Pinned
+                && (latest.is_none() || s.skipped_version.as_deref() != latest)
+        })
+}
+
+fn list_json(apps: &[AppRecord], sources: &[SourceRecord]) -> serde_json::Value {
+    let by_id: std::collections::HashMap<&str, &SourceRecord> =
+        sources.iter().map(|s| (s.app_id.as_str(), s)).collect();
+    let mut updates = 0;
+    let rows: Vec<serde_json::Value> = apps
+        .iter()
+        .map(|a| {
+            let src = by_id.get(a.id.as_str()).copied();
+            let status = src.and_then(|s| s.last_status.as_deref());
+            let latest = src.and_then(|s| s.last_latest.as_deref());
+            let update = counts_as_update(status, latest, src);
+            updates += usize::from(update);
+            json!({
+                "id": a.id,
+                "name": a.name,
+                "version": a.version.clone().or(src.and_then(|s| s.installed_version.clone())),
+                "desktop_id": format!("{}.desktop", appofholding_core::paths::desktop_id(&a.id)),
+                "appimage": a.appimage_path.display().to_string(),
+                "has_source": src.is_some(),
+                "source": src.map(|s| s.source.describe()),
+                "policy": src.map(|s| s.policy.as_str()),
+                "status": status,
+                "latest": latest,
+                "skipped": src.and_then(|s| s.skipped_version.clone()),
+                "error": src.and_then(|s| s.last_error.clone()),
+                "last_checked": src.and_then(|s| s.last_checked),
+                "update": update,
+            })
+        })
+        .collect();
+    json!({ "version": 1, "apps": rows, "updates": updates })
+}
+
+fn check_row(
+    id: &str,
+    result: &std::result::Result<Report, appofholding_core::Error>,
+) -> serde_json::Value {
+    match result {
+        Ok(r) => json!({
+            "id": id,
+            "status": r.status.as_str(),
+            "latest": r.latest_version(),
+            "problem": r.problem(),
+            "error": null,
+        }),
+        Err(e) => json!({
+            "id": id,
+            "status": null,
+            "latest": null,
+            "problem": null,
+            "error": e.to_string(),
+        }),
+    }
+}
+
+fn check_json(
+    results: &[(
+        String,
+        std::result::Result<Report, appofholding_core::Error>,
+    )],
+) -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = results.iter().map(|(i, r)| check_row(i, r)).collect();
+    let updates = results
+        .iter()
+        .filter(|(_, r)| {
+            r.as_ref()
+                .is_ok_and(|r| r.problem().is_none() && r.status == Status::UpdateAvailable)
+        })
+        .count();
+    json!({ "version": 1, "apps": rows, "updates": updates })
+}
+
+/// One line for a notification about one app's check.
+fn check_summary(result: &std::result::Result<Report, appofholding_core::Error>) -> String {
+    match result {
+        Ok(r) => match (r.problem(), r.status) {
+            (Some(p), _) => format!("Could not choose the update: {p}"),
+            (None, Status::UpdateAvailable) => {
+                format!("Version {} is available.", r.latest_version())
+            }
+            (None, Status::UpToDate) => format!("Up to date (latest: {}).", r.latest_version()),
+            (None, Status::Unknown) => format!(
+                "Can't tell whether {} is newer than the installed version.",
+                r.latest_version()
+            ),
+        },
+        Err(e) => format!("Could not check for updates: {e}"),
+    }
+}
+
+/// `interval` is `None` when the timer is missing or was edited to another calendar.
+fn schedule_json(installed: bool, interval: Option<Interval>) -> serde_json::Value {
+    json!({
+        "version": 1,
+        "installed": installed,
+        "interval": interval.filter(|_| installed).map(Interval::as_str),
+    })
+}
+
+/// The library app behind a menu entry's desktop id (`appofholding-<id>.desktop`).
+fn app_for_desktop_id(lib: &Library, desktop_id: &str) -> Result<String> {
+    let Some(id) = appofholding_core::paths::app_id_from_desktop_id(desktop_id) else {
+        bail!("{desktop_id} is not a menu entry made by appOFholding");
+    };
+    lib.get(id)?;
+    Ok(id.to_string())
+}
+
 fn dirs() -> Result<Dirs> {
     Ok(Dirs::detect()?)
 }
@@ -1548,7 +1706,11 @@ fn main() -> Result<()> {
                 println!("\nApply one with: appofholding suggest <id> --apply <key>");
             }
         }
-        Cmd::List => {
+        Cmd::List { json: true } => {
+            let lib = library()?;
+            println!("{}", list_json(&lib.list()?, &lib.sources()?));
+        }
+        Cmd::List { json: false } => {
             let apps = library()?.list()?;
             if apps.is_empty() {
                 println!("No apps yet. Add one with: appofholding add <file>");
@@ -1731,19 +1893,39 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Source(cmd) => source_cmd(cmd)?,
-        Cmd::Check { id } => {
+        Cmd::Check {
+            id,
+            desktop_id,
+            json,
+            notify,
+        } => {
             let lib = library()?;
             let http = UreqHttp::new();
+            let id = match desktop_id {
+                Some(d) => Some(app_for_desktop_id(&lib, &d)?),
+                None => id,
+            };
             let ids: Vec<String> = match id {
                 Some(i) => vec![i],
                 None => lib.sources()?.into_iter().map(|s| s.app_id).collect(),
             };
+            let results = lib.check_many(&http, &ids);
+            if notify {
+                for (i, result) in &results {
+                    let name = lib.get(i).map(|a| a.name).unwrap_or_else(|_| i.clone());
+                    NotifySend.notify(&name, &check_summary(result));
+                }
+            }
+            if json {
+                println!("{}", check_json(&results));
+                return Ok(());
+            }
             if ids.is_empty() {
                 println!(
                     "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
             }
-            for (i, result) in lib.check_many(&http, &ids) {
+            for (i, result) in results {
                 match result {
                     Ok(r) => match r.problem() {
                         Some(p) => println!("{i:<24} problem: {p}"),
@@ -1946,6 +2128,162 @@ mod tests {
         assert_eq!(
             short(Path::new("/opt/a.AppImage"), Path::new("/home/u")),
             "/opt/a.AppImage"
+        );
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+    use appofholding_core::assets::Asset;
+    use appofholding_core::providers::Release;
+
+    fn app(id: &str) -> AppRecord {
+        AppRecord {
+            id: id.into(),
+            name: id.to_uppercase(),
+            appimage_path: format!("/apps/{id}.AppImage").into(),
+            desktop_file: format!("/apps/appofholding-{id}.desktop").into(),
+            icon_file: None,
+            version: Some("1.0".into()),
+            sha256: "00".repeat(32),
+            size: 1,
+            appimage_type: 2,
+            update_info: None,
+            added_at: 0,
+            external_file: false,
+        }
+    }
+
+    fn src(id: &str, status: &str, latest: &str, policy: Policy) -> SourceRecord {
+        SourceRecord {
+            app_id: id.into(),
+            source: Source::new(source::Provider::GitHub {
+                owner: "o".into(),
+                repo: id.into(),
+            }),
+            last_checked: Some(10),
+            last_status: Some(status.into()),
+            last_error: None,
+            last_latest: Some(latest.into()),
+            installed_version: Some("1.0".into()),
+            installed_digest: None,
+            policy,
+            skipped_version: None,
+            notified_version: None,
+            etag: None,
+            etag_ctx: None,
+        }
+    }
+
+    #[test]
+    fn list_json_counts_updates_the_user_can_act_on() {
+        let apps = ["a", "b", "c", "d", "e"].map(app);
+        let mut skipped = src("d", "update-available", "3.0", Policy::Notify);
+        skipped.skipped_version = Some("3.0".into());
+        let sources = vec![
+            src("a", "update-available", "2.0", Policy::Notify),
+            src("b", "update-available", "2.0", Policy::Pinned),
+            src("c", "up-to-date", "1.0", Policy::Auto),
+            skipped,
+        ];
+        let v = list_json(&apps, &sources);
+        assert_eq!(v["version"], 1);
+        assert_eq!(v["updates"], 1);
+        let rows = v["apps"].as_array().unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0]["update"], true);
+        assert_eq!(rows[0]["latest"], "2.0");
+        assert_eq!(rows[0]["policy"], "notify");
+        assert_eq!(rows[0]["source"], "github.com/o/a [latest]");
+        assert_eq!(rows[0]["desktop_id"], "appofholding-a.desktop");
+        assert_eq!(rows[1]["update"], false, "pinned");
+        assert_eq!(rows[2]["status"], "up-to-date");
+        assert_eq!(rows[3]["update"], false, "skipped");
+        assert_eq!(rows[3]["skipped"], "3.0");
+        assert_eq!(rows[4]["has_source"], false);
+        assert!(rows[4]["policy"].is_null());
+    }
+
+    fn report(tag: &str, status: Status, assets: usize) -> Report {
+        let asset = |n: usize| Asset {
+            name: format!("A-{n}.AppImage"),
+            url: format!("https://x/{n}"),
+            size: None,
+            sha256: None,
+        };
+        let list: Vec<Asset> = (0..assets).map(asset).collect();
+        Report {
+            release: Release {
+                tag: tag.into(),
+                name: None,
+                prerelease: false,
+                published_at: None,
+                notes: None,
+                assets: list.clone(),
+                opaque: false,
+            },
+            selection: match assets {
+                0 => Selection::None,
+                1 => Selection::One(list[0].clone()),
+                _ => Selection::Ambiguous(list),
+            },
+            status,
+        }
+    }
+
+    #[test]
+    fn check_json_rows_and_summaries() {
+        let results = vec![
+            (
+                "a".to_string(),
+                Ok(report("v2", Status::UpdateAvailable, 1)),
+            ),
+            ("b".to_string(), Ok(report("v1", Status::UpToDate, 1))),
+            (
+                "c".to_string(),
+                Ok(report("v3", Status::UpdateAvailable, 2)),
+            ),
+            (
+                "d".to_string(),
+                Err(appofholding_core::Error::Other("offline".into())),
+            ),
+        ];
+        let v = check_json(&results);
+        assert_eq!(v["version"], 1);
+        assert_eq!(v["updates"], 1, "an ambiguous release is not an update yet");
+        let rows = v["apps"].as_array().unwrap();
+        assert_eq!(rows[0]["status"], "update-available");
+        assert_eq!(rows[0]["latest"], "v2");
+        assert!(rows[0]["problem"].is_null() && rows[0]["error"].is_null());
+        assert!(
+            rows[2]["problem"]
+                .as_str()
+                .unwrap()
+                .contains("2 assets match")
+        );
+        assert_eq!(rows[3]["error"], "offline");
+        assert!(rows[3]["status"].is_null());
+
+        assert_eq!(check_summary(&results[0].1), "Version v2 is available.");
+        assert_eq!(check_summary(&results[1].1), "Up to date (latest: v1).");
+        assert!(check_summary(&results[2].1).starts_with("Could not choose the update"));
+        assert!(check_summary(&results[3].1).contains("offline"));
+    }
+
+    #[test]
+    fn schedule_json_shapes() {
+        assert_eq!(
+            schedule_json(true, Some(Interval::Weekly)),
+            json!({"version": 1, "installed": true, "interval": "weekly"})
+        );
+        assert_eq!(
+            schedule_json(true, None),
+            json!({"version": 1, "installed": true, "interval": null})
+        );
+        assert_eq!(
+            schedule_json(false, Some(Interval::Daily)),
+            json!({"version": 1, "installed": false, "interval": null})
         );
     }
 }

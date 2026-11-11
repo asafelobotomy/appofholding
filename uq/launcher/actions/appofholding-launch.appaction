@@ -1,0 +1,8 @@
+# "Launch options…" on the menu entries appOFholding writes (appofholding-<id>.desktop): opens
+# appOFholding's window on that app's Launch tab (or shows the running window there).
+[App Action]
+Name=Launch options…
+Icon=configure
+Match=appofholding-*.desktop
+Exec=/usr/bin/appofholding-gui --tab launch --desktop-id %d
+Terminal=false

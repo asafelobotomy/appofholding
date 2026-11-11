@@ -19,11 +19,76 @@ pub struct Request {
     pub files: Vec<String>,
     /// Bring the window up. A start from the login autostart with `--tray` does not.
     pub show: bool,
+    /// An app's page to show (`--app` / `--desktop-id`, `--tab`).
+    pub open: Option<Open>,
+}
+
+/// An app's page to show, on one of its tabs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Open {
+    /// The library id (not checked here; the page says when there is no such app).
+    pub app: String,
+    /// One of [`TABS`].
+    pub tab: String,
+}
+
+impl Open {
+    pub fn to_json(&self) -> Value {
+        json!({"app": self.app, "tab": self.tab})
+    }
+}
+
+/// The tabs of an app's page, in order.
+pub const TABS: [&str; 4] = ["overview", "updates", "launch", "sandbox"];
+
+/// Options that take a value: `--app ID`, `--desktop-id appofholding-ID.desktop`, `--tab TAB`
+/// (also written `--tab=TAB`).
+const VALUE_OPTIONS: [&str; 3] = ["--app", "--desktop-id", "--tab"];
+
+/// Split the command line (without the program name) into the AppImages to add (every argument
+/// that is not an option or an option's value) and the app page to show. A desktop id that
+/// appOFholding did not write, or an unknown tab, is ignored.
+pub fn parse_args(args: &[String]) -> (Vec<String>, Option<Open>) {
+    let mut files = Vec::new();
+    let (mut app, mut tab): (Option<String>, Option<String>) = (None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let (name, value) = match a.split_once('=') {
+            Some((n, v)) if VALUE_OPTIONS.contains(&n) => (n, Some(v.to_string())),
+            _ if VALUE_OPTIONS.contains(&a.as_str()) => (a.as_str(), it.next().cloned()),
+            _ => {
+                if !a.starts_with('-') {
+                    files.push(a.clone());
+                }
+                continue;
+            }
+        };
+        let Some(value) = value else { continue };
+        match name {
+            "--app" => app = Some(value),
+            "--desktop-id" => {
+                app = appofholding_core::paths::app_id_from_desktop_id(&value).map(str::to_string)
+            }
+            _ => tab = Some(value),
+        }
+    }
+    let open = app.filter(|a| !a.is_empty()).map(|app| Open {
+        app,
+        tab: tab
+            .filter(|t| TABS.contains(&t.as_str()))
+            .unwrap_or_else(|| TABS[0].to_string()),
+    });
+    (files, open)
 }
 
 impl Request {
     pub fn encode(&self) -> String {
-        json!({"files": self.files, "show": self.show}).to_string()
+        json!({
+            "files": self.files,
+            "show": self.show,
+            "open": self.open.as_ref().map(Open::to_json),
+        })
+        .to_string()
     }
 
     pub fn decode(line: &str) -> Option<Request> {
@@ -36,6 +101,12 @@ impl Request {
                 .filter_map(|f| f.as_str().map(str::to_string))
                 .collect(),
             show: v.get("show").and_then(Value::as_bool).unwrap_or(true),
+            open: v.get("open").and_then(|o| {
+                Some(Open {
+                    app: o.get("app")?.as_str()?.to_string(),
+                    tab: o.get("tab")?.as_str()?.to_string(),
+                })
+            }),
         })
     }
 }
@@ -109,6 +180,7 @@ mod tests {
         let r = Request {
             files: vec!["/home/u/My Apps/x.AppImage".into()],
             show: false,
+            open: None,
         };
         assert_eq!(Request::decode(&r.encode()), Some(r));
         assert_eq!(Request::decode("garbage"), None);
@@ -116,9 +188,67 @@ mod tests {
             Request::decode(r#"{"files":[]}"#),
             Some(Request {
                 files: vec![],
-                show: true
+                show: true,
+                open: None,
             })
         );
+    }
+
+    #[test]
+    fn requests_carry_the_page_to_open() {
+        let r = Request {
+            files: vec![],
+            show: true,
+            open: Some(Open {
+                app: "krita".into(),
+                tab: "launch".into(),
+            }),
+        };
+        assert_eq!(Request::decode(&r.encode()), Some(r));
+        // A request from an older version has no "open".
+        assert_eq!(
+            Request::decode(r#"{"files":[],"show":true}"#).unwrap().open,
+            None
+        );
+    }
+
+    #[test]
+    fn arguments_split_into_files_and_a_page() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let open = |app: &str, tab: &str| {
+            Some(Open {
+                app: app.into(),
+                tab: tab.into(),
+            })
+        };
+        assert_eq!(
+            parse_args(&a(&["/x/A.AppImage", "--tray", "b.AppImage"])),
+            (a(&["/x/A.AppImage", "b.AppImage"]), None)
+        );
+        assert_eq!(
+            parse_args(&a(&[
+                "--tab",
+                "launch",
+                "--desktop-id",
+                "appofholding-krita.desktop"
+            ])),
+            (vec![], open("krita", "launch"))
+        );
+        assert_eq!(
+            parse_args(&a(&["--app=krita", "--tab=sandbox", "c.AppImage"])),
+            (a(&["c.AppImage"]), open("krita", "sandbox"))
+        );
+        // An unknown tab shows the overview; a foreign desktop id opens nothing.
+        assert_eq!(
+            parse_args(&a(&["--app", "krita", "--tab", "nope"])).1,
+            open("krita", "overview")
+        );
+        assert_eq!(
+            parse_args(&a(&["--desktop-id", "firefox.desktop"])),
+            (vec![], None)
+        );
+        // An option's value is never taken for a file, even when it is missing.
+        assert_eq!(parse_args(&a(&["--tab"])), (vec![], None));
     }
 
     #[test]
@@ -128,6 +258,7 @@ mod tests {
         let req = Request {
             files: vec!["/a.AppImage".into()],
             show: true,
+            open: None,
         };
         assert!(!forward(&path, &req), "nobody is listening yet");
 
@@ -150,6 +281,7 @@ mod tests {
         let req = Request {
             files: vec![],
             show: true,
+            open: None,
         };
         assert!(forward(&path, &req));
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), req);

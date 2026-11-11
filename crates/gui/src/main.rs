@@ -75,6 +75,7 @@ fn hand_over_to_running_copy() {
     let req = instance::Request {
         files: backend::startup_file_list(),
         show: !backend::started_in_tray(),
+        open: backend::startup_open(),
     };
     if instance::forward(&path, &req) {
         std::process::exit(0);

@@ -842,3 +842,88 @@ fn import_options_are_validated() {
     let o = run_home(root, &home, &["import", "--dry-run", "--mode", "copy"]);
     assert!(stdout(&o).contains("copied into"), "{}", stdout(&o));
 }
+
+fn json_of(o: &Output) -> serde_json::Value {
+    assert!(o.status.success(), "{}", err(o));
+    serde_json::from_slice(&o.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(o)))
+}
+
+#[test]
+fn list_check_and_schedule_print_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let v = json_of(&run(root, &["list", "--json"]));
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["apps"].as_array().unwrap().len(), 0);
+    assert_eq!(v["updates"], 0);
+
+    add_fixture(root);
+    let v = json_of(&run(root, &["list", "--json"]));
+    let app = &v["apps"][0];
+    assert_eq!(app["id"], "foo-app");
+    assert_eq!(app["name"], "Foo App");
+    assert_eq!(app["desktop_id"], "appofholding-foo-app.desktop");
+    assert_eq!(app["has_source"], false);
+    assert!(app["policy"].is_null() && app["status"].is_null());
+    assert_eq!(app["update"], false);
+
+    // A source nobody answers (port 9, discard): the error is a row, not a failure.
+    let o = run(
+        root,
+        &[
+            "source",
+            "set",
+            "foo-app",
+            "http://127.0.0.1:9/Foo.AppImage",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let v = json_of(&run(root, &["check", "--json"]));
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["updates"], 0);
+    let row = &v["apps"][0];
+    assert_eq!(row["id"], "foo-app");
+    assert!(row["status"].is_null());
+    assert!(
+        row["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{row}"
+    );
+
+    // The same app by its menu entry's desktop id; a foreign entry is refused.
+    let v = json_of(&run(
+        root,
+        &[
+            "check",
+            "--json",
+            "--desktop-id",
+            "appofholding-foo-app.desktop",
+        ],
+    ));
+    assert_eq!(v["apps"][0]["id"], "foo-app");
+    let o = run(root, &["check", "--desktop-id", "firefox.desktop"]);
+    assert!(!o.status.success());
+    assert!(
+        err(&o).contains("not a menu entry made by appOFholding"),
+        "{}",
+        err(&o)
+    );
+    let o = run(
+        root,
+        &["check", "--desktop-id", "appofholding-nope.desktop"],
+    );
+    assert!(!o.status.success());
+
+    // The failed check is remembered for `list`, with the policy.
+    let v = json_of(&run(root, &["list", "--json"]));
+    let app = &v["apps"][0];
+    assert_eq!(app["has_source"], true);
+    assert_eq!(app["policy"], "notify");
+    assert!(app["error"].as_str().is_some(), "{app}");
+
+    let v = json_of(&run(root, &["schedule", "status", "--json"]));
+    assert_eq!(
+        v,
+        serde_json::json!({"version": 1, "installed": false, "interval": null})
+    );
+}

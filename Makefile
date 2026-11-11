@@ -43,6 +43,10 @@ install: build
 	$(CLI) completions bash > $(DESTDIR)$(SHARE)/bash-completion/completions/appofholding
 	$(CLI) completions zsh  > $(DESTDIR)$(SHARE)/zsh/site-functions/_appofholding
 	$(CLI) completions fish > $(DESTDIR)$(SHARE)/fish/vendor_completions.d/appofholding.fish
+	# uQ desktop integration (uq/README.md): inert without uQ.
+	for d in uq/widgets/*/; do install -Dm644 -t $(DESTDIR)$(SHARE)/uq/shell/widgets/$$(basename $$d) $$d*; done
+	for d in uq/pages/*/; do install -Dm644 -t $(DESTDIR)$(SHARE)/uq/settings/pages/$$(basename $$d) $$d*; done
+	install -Dm644 -t $(DESTDIR)$(SHARE)/uq/launcher/actions uq/launcher/actions/*.appaction
 	install -Dm644 README.md $(DESTDIR)$(SHARE)/doc/appofholding/README.md
 	install -d $(DESTDIR)$(SHARE)/doc/appofholding
 	install -m644 docs/*.md $(DESTDIR)$(SHARE)/doc/appofholding/
@@ -53,6 +57,8 @@ uninstall:
 	rm -f $(DESTDIR)$(SHARE)/icons/hicolor/scalable/apps/$(APPID).svg
 	rm -f $(DESTDIR)$(SHARE)/metainfo/$(APPID).metainfo.xml
 	rm -rf $(DESTDIR)$(SHARE)/licenses/appofholding $(DESTDIR)$(SHARE)/doc/appofholding
+	rm -rf $(DESTDIR)$(SHARE)/uq/shell/widgets/appofholding $(DESTDIR)$(SHARE)/uq/settings/pages/appimages
+	rm -f $(DESTDIR)$(SHARE)/uq/launcher/actions/appofholding-check.appaction $(DESTDIR)$(SHARE)/uq/launcher/actions/appofholding-launch.appaction
 	rm -f $(DESTDIR)$(SHARE)/man/man1/appofholding*.1
 	rm -f $(DESTDIR)$(SHARE)/bash-completion/completions/appofholding $(DESTDIR)$(SHARE)/zsh/site-functions/_appofholding $(DESTDIR)$(SHARE)/fish/vendor_completions.d/appofholding.fish
 
