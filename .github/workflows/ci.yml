@@ -67,7 +67,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qt6-declarative-dev-tools qml6-module-qtquick \
-            qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qttest qml6-module-qtqml-workerscript
+            qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qttest qml6-module-qtqml-workerscript \
+            qml6-module-qtquick-window qml6-module-qtquick-templates
       - name: Widget
         run: QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/uq/tst_widget.qml
       - name: Settings page
