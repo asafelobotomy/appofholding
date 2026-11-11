@@ -13,7 +13,6 @@ fixtures = []
 [dependencies]
 backhand = "0.25.5"
 hex = "0.4.3"
-percent-encoding = "2.3.2"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

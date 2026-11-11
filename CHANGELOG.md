@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Drag and drop AppImages onto the window**, on any page. appOFholding asks where each one
+  should live: **move it** into the apps folder (the default), **copy it** there, or **leave it
+  where it is** (it then stays your file). Tick *Do this every time* to stop asking, or pick the
+  answer under Settings → *Adding AppImages*. The same choice applies to files opened with
+  appOFholding from the file manager and to *Add from a file…*; files already in the apps folder
+  are simply added. Previously a drop only worked on the app list and always copied.
 - **uQ desktop integration** (`uq/`, installed by `make install` and every package; inert
   without uQ): a quick-settings tile with the number of updates, an **AppImages** page in uQ
   Settings (the library, Check now, Update all, each app's update policy, the background check
@@ -42,6 +48,12 @@
     when the app runs as root; the Sandbox summary says what is allowed; the File card shows the
     app's id for the command line, and "Show in folder" works for folders with unusual names.
   - The duplicate *Open* action in the page header was removed (it is the button by the name).
+- Settings showed "Every day" for the background checks whatever interval was installed; it now
+  reads the interval back from the timer, and `appofholding schedule status` prints it too.
+- Cleanup: the timer is turned on and off by one shared function instead of copies in the CLI
+  and the interface; the unused `percent-encoding` dependency and `notify::Silent` were removed;
+  the interface's settings files share one loader; `docs/configuration.md` lists every interface
+  setting, including the tray and autostart ones.
 - The interface now creates a Qt Widgets application, so the tray icon also works on panels that
   only offer the older XEmbed tray. Packages gain a dependency on Qt Labs Platform (part of
   `qt6-declarative` on Arch and Fedora; `qml6-module-qt-labs-platform` on Debian/Ubuntu).

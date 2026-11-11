@@ -226,7 +226,7 @@ ThemedPage {
             icon.source: "qrc:/appofholding/app-icon.svg"
             text: page.allApps.length === 0 ? qsTr("Your AppImages will live here") : qsTr("No app matches “%1”").arg(page.query)
             explanation: page.allApps.length === 0
-                ? qsTr("Bring in the AppImages you already have, or add one from a GitHub link. Drop a file here to add it.")
+                ? qsTr("Bring in the AppImages you already have, add one from a GitHub link, or drop AppImage files anywhere on this window.")
                 : ""
             helpfulAction: page.allApps.length === 0 ? importAction : null
             Kirigami.Action {
@@ -234,28 +234,6 @@ ThemedPage {
                 text: qsTr("Import existing AppImages…")
                 icon.name: "document-import"
                 onTriggered: applicationWindow().openImportDialog()
-            }
-        }
-    }
-
-    DropArea {
-        anchors.fill: parent
-        onDropped: (drop) => {
-            for (var i = 0; i < drop.urls.length; i++) {
-                applicationWindow().backendObject.start("addFile", "", drop.urls[i].toString(), "", "")
-            }
-        }
-        Rectangle {
-            anchors.fill: parent
-            visible: parent.containsDrag
-            color: Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.15)
-            border.color: Kirigami.Theme.highlightColor
-            border.width: 2
-            radius: Kirigami.Units.cornerRadius
-            Kirigami.Heading {
-                anchors.centerIn: parent
-                level: 2
-                text: qsTr("Drop to add")
             }
         }
     }

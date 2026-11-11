@@ -334,26 +334,36 @@ pub fn remove_app(lib: &Library, id: &str, purge: bool) -> Res<()> {
 /// Colour themes the interface offers; the first is "follow the desktop".
 pub const THEMES: [&str; 3] = ["system", "gruvbox-dark", "gruvbox-light"];
 
-fn theme_file(dirs: &Dirs) -> std::path::PathBuf {
-    dirs.config_home.join("appofholding").join("gui-theme")
+/// A one-word interface setting kept in `~/.config/appofholding/<file>`, one of `choices`.
+fn gui_file(dirs: &Dirs, file: &str) -> PathBuf {
+    dirs.config_home.join("appofholding").join(file)
+}
+
+/// The saved choice; anything missing or unrecognised means the first one.
+fn choice_load(dirs: &Dirs, file: &str, choices: &[&str]) -> String {
+    std::fs::read_to_string(gui_file(dirs, file))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| choices.contains(&t.as_str()))
+        .unwrap_or_else(|| choices[0].to_string())
+}
+
+fn choice_save(dirs: &Dirs, file: &str, choices: &[&str], what: &str, name: &str) -> Res<()> {
+    if !choices.contains(&name) {
+        return Err(format!("unknown {what} '{name}'"));
+    }
+    let f = gui_file(dirs, file);
+    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
+    std::fs::write(f, format!("{name}\n")).map_err(e)
 }
 
 /// The saved colour theme; anything missing or unrecognised means "system".
 pub fn theme_load(dirs: &Dirs) -> String {
-    std::fs::read_to_string(theme_file(dirs))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| THEMES.contains(&t.as_str()))
-        .unwrap_or_else(|| THEMES[0].to_string())
+    choice_load(dirs, "gui-theme", &THEMES)
 }
 
 pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
-    if !THEMES.contains(&name) {
-        return Err(format!("unknown theme '{name}'"));
-    }
-    let f = theme_file(dirs);
-    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
-    std::fs::write(f, format!("{name}\n")).map_err(e)
+    choice_save(dirs, "gui-theme", &THEMES, "theme", name)
 }
 
 /// Improvements worth suggesting for one app on this computer (see `core::suggest`).
@@ -384,26 +394,13 @@ pub fn dismiss_suggestion(lib: &Library, id: &str, key: &str) -> Res<()> {
 /// How the library lists apps; the first is the default.
 pub const VIEWS: [&str; 3] = ["list", "grid", "compact"];
 
-fn view_file(dirs: &Dirs) -> std::path::PathBuf {
-    dirs.config_home.join("appofholding").join("gui-view")
-}
-
 /// The saved library layout; anything missing or unrecognised means "list".
 pub fn view_load(dirs: &Dirs) -> String {
-    std::fs::read_to_string(view_file(dirs))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| VIEWS.contains(&t.as_str()))
-        .unwrap_or_else(|| VIEWS[0].to_string())
+    choice_load(dirs, "gui-view", &VIEWS)
 }
 
 pub fn view_save(dirs: &Dirs, name: &str) -> Res<()> {
-    if !VIEWS.contains(&name) {
-        return Err(format!("unknown view '{name}'"));
-    }
-    let f = view_file(dirs);
-    std::fs::create_dir_all(f.parent().expect("has a parent")).map_err(e)?;
-    std::fs::write(f, format!("{name}\n")).map_err(e)
+    choice_save(dirs, "gui-view", &VIEWS, "view", name)
 }
 
 // ---- desktop integration: tray icon, starting with the session
@@ -421,7 +418,13 @@ pub struct DesktopSettings {
     pub notify_updates: bool,
     /// Started with the session: stay in the tray instead of opening the window.
     pub start_in_tray: bool,
+    /// What to do with an AppImage dropped on the window or opened with appOFholding:
+    /// `ask`, or one of the add modes (`move`, `copy`, `in-place`).
+    pub drop_action: String,
 }
+
+/// The choices for `DesktopSettings::drop_action`; the first is the default.
+pub const DROP_ACTIONS: [&str; 4] = ["ask", "move", "copy", "in-place"];
 
 impl Default for DesktopSettings {
     fn default() -> Self {
@@ -431,6 +434,7 @@ impl Default for DesktopSettings {
             close_to_tray: false,
             notify_updates: true,
             start_in_tray: true,
+            drop_action: DROP_ACTIONS[0].to_string(),
         }
     }
 }
@@ -443,6 +447,7 @@ impl DesktopSettings {
             "closeToTray": self.close_to_tray,
             "notifyUpdates": self.notify_updates,
             "startInTray": self.start_in_tray,
+            "dropAction": self.drop_action,
         })
     }
 
@@ -455,14 +460,17 @@ impl DesktopSettings {
             close_to_tray: b("closeToTray", d.close_to_tray),
             notify_updates: b("notifyUpdates", d.notify_updates),
             start_in_tray: b("startInTray", d.start_in_tray),
+            drop_action: v
+                .get("dropAction")
+                .and_then(Value::as_str)
+                .filter(|a| DROP_ACTIONS.contains(a))
+                .map_or(d.drop_action, str::to_string),
         }
     }
 }
 
 fn desktop_file(dirs: &Dirs) -> PathBuf {
-    dirs.config_home
-        .join("appofholding")
-        .join("gui-desktop.json")
+    gui_file(dirs, "gui-desktop.json")
 }
 
 /// The XDG autostart entry that starts appOFholding when the user logs in.
@@ -544,41 +552,22 @@ pub fn gui_exe() -> Res<PathBuf> {
 }
 
 pub fn schedule_status(dirs: &Dirs) -> Value {
-    let (svc, timer) = schedule::unit_paths(dirs);
-    json!({ "installed": svc.exists() && timer.exists() })
+    json!({
+        "installed": schedule::installed(dirs),
+        "interval": schedule::installed_interval(dirs).map(Interval::as_str),
+    })
 }
 
 pub fn schedule_install(dirs: &Dirs, interval: &str) -> Res<()> {
     let iv = Interval::parse(interval).ok_or("interval must be hourly, daily or weekly")?;
-    schedule::write_units(dirs, &cli_path(), iv).map_err(e)?;
-    if dirs.refresh_caches {
-        let ok = |args: &[&str]| {
-            Command::new("systemctl")
-                .arg("--user")
-                .args(args)
-                .status()
-                .is_ok_and(|s| s.success())
-        };
-        if !(ok(&["daemon-reload"]) && ok(&["enable", "--now", "appofholding-update.timer"])) {
-            return Err("wrote the timer files but systemd would not enable them".into());
-        }
+    if !schedule::enable(dirs, &cli_path(), iv).map_err(e)? {
+        return Err("wrote the timer files but systemd would not enable them".into());
     }
     Ok(())
 }
 
 pub fn schedule_remove(dirs: &Dirs) -> Res<()> {
-    if dirs.refresh_caches {
-        let _ = Command::new("systemctl")
-            .args(["--user", "disable", "--now", "appofholding-update.timer"])
-            .status();
-    }
-    schedule::remove_units(dirs).map(|_| ()).map_err(e)?;
-    if dirs.refresh_caches {
-        let _ = Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-    }
-    Ok(())
+    schedule::disable(dirs).map(|_| ()).map_err(e)
 }
 
 // ---- operations that need the network (the backend runs these on a worker thread)
@@ -908,18 +897,37 @@ pub fn local_path(s: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
 }
 
-pub fn add_file(lib: &Library, path: &str) -> Res<Value> {
+/// Add one AppImage. `mode` is `move` (into the library folder), `copy` (the default) or
+/// `in-place` (leave it where it is; it stays the user's file).
+pub fn add_file(lib: &Library, path: &str, mode: &str) -> Res<Value> {
     let path = local_path(path);
+    let install = mode_from(mode)?.unwrap_or(Install::Copy);
     let rec = lib
-        .add(
-            &path,
-            &AddOptions {
-                install: Install::Copy,
-                id: None,
-            },
-        )
+        .add(&path, &AddOptions { install, id: None })
         .map_err(e)?;
-    Ok(json!({"id": rec.id, "name": rec.name}))
+    Ok(json!({"id": rec.id, "name": rec.name, "moved": install == Install::Move}))
+}
+
+/// What the window needs to know about files dropped on it before asking where they should
+/// go: for each, its absolute path, its file name, and whether it already sits in the library
+/// folder (then there is nothing to ask). Folders and missing files are left out.
+pub fn describe_drop(lib_dir: &Path, paths: &[String]) -> Value {
+    let lib_dir = std::fs::canonicalize(lib_dir).unwrap_or_else(|_| lib_dir.to_path_buf());
+    Value::Array(
+        paths
+            .iter()
+            .map(|p| local_path(p))
+            .filter(|p| p.is_file())
+            .map(|p| {
+                let real = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                json!({
+                    "path": p.display().to_string(),
+                    "name": p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    "inLibrary": real.parent() == Some(lib_dir.as_path()),
+                })
+            })
+            .collect(),
+    )
 }
 
 pub fn check_app(lib: &Library, http: &dyn appofholding_core::http::Http, id: &str) -> Res<Value> {
@@ -1006,7 +1014,7 @@ mod tests {
         theme_save(&dirs, "gruvbox-light").unwrap();
         assert_eq!(theme_load(&dirs), "gruvbox-light");
         assert!(theme_save(&dirs, "../evil").is_err());
-        std::fs::write(theme_file(&dirs), "garbage").unwrap();
+        std::fs::write(gui_file(&dirs, "gui-theme"), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
     }
 
@@ -1099,6 +1107,60 @@ mod tests {
     }
 
     #[test]
+    fn dropped_files_are_described_and_added_by_mode() {
+        let (tmp, lib) = lib();
+        let elsewhere = tmp.path().join("Downloads");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let mk = |dir: &Path, file: &str, name: &str| {
+            let p = dir.join(file);
+            std::fs::write(&p, fixture::simple_appimage(name, None)).unwrap();
+            p.display().to_string()
+        };
+        let moved = mk(&elsewhere, "Moved.AppImage", "Moved App");
+        let copied = mk(&elsewhere, "Copied.AppImage", "Copied App");
+        let kept = mk(&elsewhere, "Kept.AppImage", "Kept App");
+        std::fs::create_dir_all(&lib.dirs.library_dir).unwrap();
+        let already = mk(&lib.dirs.library_dir, "Already.AppImage", "Already App");
+
+        let d = describe_drop(
+            &lib.dirs.library_dir,
+            &[
+                format!("file://{moved}"),
+                already.clone(),
+                elsewhere.display().to_string(), // a folder: left out
+                "/nonexistent/x.AppImage".into(),
+            ],
+        );
+        let d = d.as_array().unwrap();
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert_eq!(d[0]["name"], "Moved.AppImage");
+        assert_eq!(d[0]["inLibrary"], false);
+        assert_eq!(d[1]["inLibrary"], true);
+
+        let r = add_file(&lib, &moved, "move").unwrap();
+        assert_eq!(r["moved"], true);
+        assert!(!Path::new(&moved).exists(), "moved away");
+        assert!(lib.dirs.library_dir.join("Moved.AppImage").exists());
+
+        add_file(&lib, &copied, "copy").unwrap();
+        assert!(
+            Path::new(&copied).exists() && lib.dirs.library_dir.join("Copied.AppImage").exists()
+        );
+
+        let r = add_file(&lib, &kept, "in-place").unwrap();
+        let rec = lib.get(r["id"].as_str().unwrap()).unwrap();
+        assert!(rec.external_file && rec.appimage_path == std::fs::canonicalize(&kept).unwrap());
+
+        add_file(&lib, &already, "move").unwrap();
+        assert!(
+            Path::new(&already).exists(),
+            "already in the library: stays put"
+        );
+
+        assert!(add_file(&lib, &kept, "sideways").is_err());
+    }
+
+    #[test]
     fn desktop_settings_and_autostart() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = Dirs::with_root(tmp.path());
@@ -1106,6 +1168,7 @@ mod tests {
         assert_eq!(d["tray"], false);
         assert_eq!(d["notifyUpdates"], true);
         assert_eq!(d["autostart"], false);
+        assert_eq!(d["dropAction"], "ask");
 
         let exe = Path::new("/opt/My Apps/appofholding-gui");
         let on = json!({"tray": true, "closeToTray": true, "startInTray": true, "autostart": true});
@@ -1133,6 +1196,11 @@ mod tests {
         desktop_save(&dirs, &json!({"autostart": false}), exe).unwrap();
         assert!(desktop_save(&dirs, &json!({"autostart": true}), Path::new("gui")).is_err());
 
+        desktop_save(&dirs, &json!({"dropAction": "move"}), exe).unwrap();
+        assert_eq!(desktop_load(&dirs)["dropAction"], "move");
+        desktop_save(&dirs, &json!({"dropAction": "shred"}), exe).unwrap();
+        assert_eq!(desktop_load(&dirs)["dropAction"], "ask");
+
         std::fs::write(desktop_file(&dirs), "garbage").unwrap();
         assert_eq!(desktop_load(&dirs)["tray"], false);
     }
@@ -1147,7 +1215,7 @@ mod tests {
         view_save(&dirs, "compact").unwrap();
         assert_eq!(view_load(&dirs), "compact");
         assert!(view_save(&dirs, "../evil").is_err());
-        std::fs::write(view_file(&dirs), "garbage").unwrap();
+        std::fs::write(gui_file(&dirs, "gui-view"), "garbage").unwrap();
         assert_eq!(view_load(&dirs), "list");
     }
 
@@ -1563,10 +1631,10 @@ mod tests {
         let (tmp, lib) = lib();
         let p = tmp.path().join("Foo.AppImage");
         std::fs::write(&p, fixture::simple_appimage("Foo App", None)).unwrap();
-        let v = add_file(&lib, &format!("file://{}", p.display())).unwrap();
+        let v = add_file(&lib, &format!("file://{}", p.display()), "").unwrap();
         assert_eq!(v["id"], "foo-app");
         assert!(
-            add_file(&lib, p.to_str().unwrap()).is_err(),
+            add_file(&lib, p.to_str().unwrap(), "").is_err(),
             "adding twice is reported"
         );
         remove_app(&lib, "foo-app", true).unwrap();

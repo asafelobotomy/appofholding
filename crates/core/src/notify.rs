@@ -23,12 +23,6 @@ impl Notifier for NotifySend {
     }
 }
 
-pub struct Silent;
-
-impl Notifier for Silent {
-    fn notify(&self, _: &str, _: &str) {}
-}
-
 /// Records notifications; for tests.
 #[cfg(any(test, feature = "fixtures"))]
 #[derive(Default)]

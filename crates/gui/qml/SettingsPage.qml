@@ -8,8 +8,13 @@ ThemedPage {
     title: qsTr("Settings")
     readonly property var backend: applicationWindow().backendObject
     property bool scheduled: false
+    property string scheduledInterval: "daily"
 
-    function load() { scheduled = !!Util.parse(backend.scheduleStatus()).installed }
+    function load() {
+        var st = Util.parse(backend.scheduleStatus())
+        scheduled = !!st.installed
+        if (st.interval) scheduledInterval = st.interval
+    }
     Component.onCompleted: load()
 
     ColumnLayout {
@@ -113,6 +118,25 @@ ThemedPage {
         }
 
         Section {
+            title: qsTr("Adding AppImages")
+            subtitle: qsTr("What happens to an AppImage you drop on the window or open with appOFholding. Files already in %1 are always just added.").arg(page.backend.dataDir())
+            QQC2.ComboBox {
+                readonly property var keys: ["ask", "move", "copy", "in-place"]
+                Layout.fillWidth: true
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+                model: [
+                    qsTr("Ask each time"),
+                    qsTr("Move it into the apps folder"),
+                    qsTr("Copy it into the apps folder"),
+                    qsTr("Leave it where it is")
+                ]
+                currentIndex: Math.max(0, keys.indexOf(deskSection.desk.dropAction))
+                onActivated: (i) => deskSection.save("dropAction", keys[i])
+                Accessible.name: qsTr("Adding AppImages")
+            }
+        }
+
+        Section {
             title: qsTr("Automatic update checks")
             subtitle: qsTr("A background timer checks your apps for updates and installs the ones set to update automatically. Apps set to notify get one notification per new version.")
 
@@ -131,10 +155,11 @@ ThemedPage {
                     id: interval
                     readonly property var keys: ["hourly", "daily", "weekly"]
                     model: [qsTr("Every hour"), qsTr("Every day"), qsTr("Every week")]
-                    currentIndex: 1
+                    currentIndex: Math.max(0, keys.indexOf(page.scheduledInterval))
                     onActivated: if (page.scheduled) {
                         var err = page.backend.scheduleInstall(keys[currentIndex])
                         if (err) applicationWindow().showPassiveNotification(err)
+                        page.load()
                     }
                 }
             }

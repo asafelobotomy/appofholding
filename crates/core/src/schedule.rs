@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::desktop::quote_exec_arg;
 use crate::error::{Error, Result};
@@ -9,6 +10,7 @@ use crate::library::write_atomic;
 use crate::paths::Dirs;
 
 pub const UNIT_NAME: &str = "appofholding-update";
+const TIMER_UNIT: &str = "appofholding-update.timer";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interval {
@@ -105,6 +107,46 @@ pub fn remove_units(dirs: &Dirs) -> Result<bool> {
     Ok(removed)
 }
 
+/// Whether both unit files exist.
+pub fn installed(dirs: &Dirs) -> bool {
+    let (svc, timer) = unit_paths(dirs);
+    svc.exists() && timer.exists()
+}
+
+fn systemctl(args: &[&str]) -> bool {
+    Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Write the units and turn the timer on. `Ok(false)` means the files were written but systemd
+/// would not enable them (the caller says how to do it by hand). Outside a real session
+/// (`refresh_caches` off, as in tests) systemd is left alone.
+pub fn enable(dirs: &Dirs, exec_bin: &Path, interval: Interval) -> Result<bool> {
+    write_units(dirs, exec_bin, interval)?;
+    Ok(!dirs.refresh_caches
+        || (systemctl(&["daemon-reload"]) && systemctl(&["enable", "--now", TIMER_UNIT])))
+}
+
+/// Turn the timer off and remove the units; true when there was something to remove.
+pub fn disable(dirs: &Dirs) -> Result<bool> {
+    if dirs.refresh_caches {
+        systemctl(&["disable", "--now", TIMER_UNIT]);
+    }
+    let removed = remove_units(dirs)?;
+    if dirs.refresh_caches {
+        systemctl(&["daemon-reload"]);
+    }
+    Ok(removed)
+}
+
+/// Print systemd's view of the timer (next and last run) to stdout.
+pub fn show_status() {
+    systemctl(&["list-timers", TIMER_UNIT, "--no-pager"]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +166,18 @@ mod tests {
         );
         assert_eq!(Interval::parse("daily"), Some(Interval::Daily));
         assert_eq!(Interval::parse("yearly"), None);
+    }
+
+    #[test]
+    fn enable_and_disable_without_systemd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::with_root(tmp.path());
+        assert!(enable(&dirs, Path::new("/usr/bin/appofholding"), Interval::Weekly).unwrap());
+        assert!(installed(&dirs));
+        assert_eq!(installed_interval(&dirs), Some(Interval::Weekly));
+        assert!(disable(&dirs).unwrap());
+        assert!(!installed(&dirs));
+        assert!(!disable(&dirs).unwrap());
     }
 
     #[test]
