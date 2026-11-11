@@ -185,9 +185,19 @@ Kirigami.ApplicationWindow {
         backend.start("notifyCheck", "", "", "", "")
     }
 
-    function openApp(id) {
+    readonly property var appTabs: ["overview", "updates", "launch", "sandbox"]
+
+    function openApp(id, tab) {
         while (pageStack.depth > 1) pageStack.pop()
-        pageStack.push(Qt.resolvedUrl("AppPage.qml"), {appId: id})
+        pageStack.push(Qt.resolvedUrl("AppPage.qml"), {appId: id, tabIndex: Math.max(0, root.appTabs.indexOf(tab || "overview"))})
+    }
+
+    // An app page asked for on the command line or by a later start: {app, tab} or null.
+    function openTarget(target) {
+        if (target && typeof target.app === "string" && target.app !== "") {
+            root.showWindow()
+            root.openApp(target.app, target.tab)
+        }
     }
 
     Component.onCompleted: {
@@ -202,6 +212,8 @@ Kirigami.ApplicationWindow {
         // Files handed to us by the desktop (double-click, "Open with", drag onto the icon).
         var files = Util.parse(backend.startupFiles())
         for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i], "", "")
+        // An app page asked for on the command line (uQ's "Launch options…" app action).
+        root.openTarget(Util.parse(backend.startupOpen()))
         backend.start("selfCheck", "", "", "", "")   // answered from a cache most of the time
     }
 
@@ -215,10 +227,11 @@ Kirigami.ApplicationWindow {
         }
 
         // Someone started appOFholding again: show this window instead of a second one.
-        function onActivated(files, show) {
+        function onActivated(files, show, target) {
             if (show) root.showWindow()
             var list = Util.parse(files)
             for (var i = 0; i < list.length; i++) backend.start("addFile", "", list[i], "", "")
+            root.openTarget(Util.parse(target))
         }
 
         function onFinished(kind, id, ok, payload) {
