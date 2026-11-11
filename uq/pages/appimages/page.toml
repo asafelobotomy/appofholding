@@ -1,0 +1,92 @@
+# appOFholding's page in uQ Settings (under Apps): the AppImage library, updating, each app's
+# update policy and the background check schedule. Installed to
+# /usr/share/uq/settings/pages/appimages/ by appOFholding's package; inert without uQ.
+# Reference: docs/settings-pages.md in the uQ repository.
+uq_api = 1
+id = "appimages"
+name = "AppImages"
+icon = "io.github.appofholding"
+category = "apps"
+qml = "Page.qml"
+keywords = ["appimage", "appofholding", "updates", "apps"]
+
+[[setting]]
+id = "apps"
+label = "AppImages in the library"
+keywords = ["list", "installed"]
+
+[[setting]]
+id = "update-all"
+label = "Update all AppImages"
+keywords = ["upgrade", "check"]
+
+[[setting]]
+id = "policy"
+label = "AppImage update policy"
+keywords = ["auto", "notify", "manual", "pinned"]
+
+[[setting]]
+id = "schedule"
+label = "Background AppImage update checks"
+keywords = ["timer", "hourly", "daily", "weekly"]
+
+[requires]
+bins = ["appofholding"]
+
+# The library with each app's policy and last known status (no network).
+[[command]]
+id = "list"
+argv = ["/usr/bin/appofholding", "list", "--json"]
+output = "json"
+timeout_ms = 5000
+
+# Ask every app's update source now (network; results are also saved for `list`).
+[[command]]
+id = "check"
+argv = ["/usr/bin/appofholding", "check", "--json"]
+output = "json"
+timeout_ms = 180000
+
+# Install every update found; an app that is running is left for later.
+[[command]]
+id = "update-all"
+argv = ["/usr/bin/appofholding", "update", "--defer-if-running"]
+output = "text"
+timeout_ms = 600000
+
+[[command]]
+id = "update"
+argv = ["/usr/bin/appofholding", "update", "--defer-if-running"]
+output = "text"
+timeout_ms = 600000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+[[command]]
+id = "policy"
+argv = ["/usr/bin/appofholding", "policy"]
+output = "text"
+timeout_ms = 5000
+args = [
+    { name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    { name = "policy", pattern = "^(auto|notify|manual|pinned)$" },
+]
+
+[[command]]
+id = "schedule-status"
+argv = ["/usr/bin/appofholding", "schedule", "status", "--json"]
+output = "json"
+timeout_ms = 5000
+
+[[command]]
+id = "schedule-install"
+argv = ["/usr/bin/appofholding", "schedule", "install", "--interval"]
+output = "text"
+timeout_ms = 20000
+args = [{ name = "interval", pattern = "^(hourly|daily|weekly)$" }]
+
+[[command]]
+id = "schedule-remove"
+argv = ["/usr/bin/appofholding", "schedule", "remove"]
+output = "text"
+timeout_ms = 20000
+confirm = "Turn off background update checks for AppImages?"

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **uQ desktop integration** (`uq/`, installed by `make install` and every package; inert
+  without uQ): a quick-settings tile with the number of updates, an **AppImages** page in uQ
+  Settings (the library, Check now, Update all, each app's update policy, the background check
+  schedule), and **Check for update** and **Launch options…** in the right-click menu of the
+  apps appOFholding added to uQ's launcher.
+- `appofholding list --json`, `check --json` and `schedule status --json` print JSON for
+  scripts. `check --desktop-id appofholding-<id>.desktop` finds an app by its menu entry, and
+  `check --notify` also shows the result as a desktop notification.
+- `appofholding-gui --app <id>` (or `--desktop-id appofholding-<id>.desktop`) opens that app's
+  page, on the tab given with `--tab overview|updates|launch|sandbox`; it also works when
+  appOFholding is already running.
 - **System tray.** Settings → *System tray and startup* adds a tray icon (left click shows or
   hides the window; its menu checks for updates or quits), with **minimise to the tray** and
   **close to the tray**. Wayland does not tell programs they were minimised, so there only

@@ -16,7 +16,8 @@ depends=(gcc-libs glibc bubblewrap xdg-dbus-proxy qt6-base qt6-declarative qt6-s
          qqc2-desktop-style hicolor-icon-theme)
 makedepends=(cargo cmake)
 optdepends=('zsync: delta updates for AppImages that publish .zsync files'
-            'libnotify: desktop notifications from the background updater')
+            'libnotify: desktop notifications from the background updater'
+            'uq: AppImages page, update tile and app-menu actions in the uQ desktop')
 options=(!lto !debug)
 
 _root() { echo "$startdir/../.."; }
