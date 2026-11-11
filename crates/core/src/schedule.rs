@@ -29,14 +29,14 @@ impl Interval {
         })
     }
     pub fn as_str(self) -> &'static str {
-        self.calendar()
-    }
-    fn calendar(self) -> &'static str {
         match self {
             Interval::Hourly => "hourly",
             Interval::Daily => "daily",
             Interval::Weekly => "weekly",
         }
+    }
+    fn calendar(self) -> &'static str {
+        self.as_str()
     }
 }
 
@@ -78,6 +78,22 @@ pub fn write_units(dirs: &Dirs, exec_bin: &Path, interval: Interval) -> Result<(
     Ok((svc, timer))
 }
 
+/// The interval of the installed timer, read back from its `OnCalendar=` line; `None` when the
+/// units are not both installed or the timer was edited to something else.
+pub fn installed_interval(dirs: &Dirs) -> Option<Interval> {
+    let (svc, timer) = unit_paths(dirs);
+    if !svc.exists() {
+        return None;
+    }
+    interval_of_timer(&fs::read_to_string(timer).ok()?)
+}
+
+fn interval_of_timer(text: &str) -> Option<Interval> {
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("OnCalendar="))
+        .and_then(|v| Interval::parse(v.trim()))
+}
+
 pub fn remove_units(dirs: &Dirs) -> Result<bool> {
     let (svc, timer) = unit_paths(dirs);
     let mut removed = false;
@@ -95,16 +111,6 @@ pub fn remove_units(dirs: &Dirs) -> Result<bool> {
 pub fn installed(dirs: &Dirs) -> bool {
     let (svc, timer) = unit_paths(dirs);
     svc.exists() && timer.exists()
-}
-
-/// The interval the installed timer runs at, read back from its unit file.
-pub fn installed_interval(dirs: &Dirs) -> Option<Interval> {
-    let (_, timer) = unit_paths(dirs);
-    fs::read_to_string(timer)
-        .ok()?
-        .lines()
-        .find_map(|l| l.strip_prefix("OnCalendar="))
-        .and_then(|v| Interval::parse(v.trim()))
 }
 
 fn systemctl(args: &[&str]) -> bool {
@@ -167,8 +173,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = Dirs::with_root(tmp.path());
         assert!(enable(&dirs, Path::new("/usr/bin/appofholding"), Interval::Weekly).unwrap());
+        assert!(installed(&dirs));
         assert_eq!(installed_interval(&dirs), Some(Interval::Weekly));
         assert!(disable(&dirs).unwrap());
+        assert!(!installed(&dirs));
         assert!(!disable(&dirs).unwrap());
     }
 
@@ -180,12 +188,22 @@ mod tests {
             write_units(&dirs, Path::new("/usr/bin/appofholding"), Interval::Daily).unwrap();
         assert!(svc.exists() && timer.exists());
         assert!(svc.starts_with(tmp.path().join("config/systemd/user")));
-        assert!(installed(&dirs));
         assert_eq!(installed_interval(&dirs), Some(Interval::Daily));
+        write_units(&dirs, Path::new("/usr/bin/appofholding"), Interval::Weekly).unwrap();
+        assert_eq!(installed_interval(&dirs), Some(Interval::Weekly));
         assert!(remove_units(&dirs).unwrap());
-        assert!(!remove_units(&dirs).unwrap());
-        assert!(!installed(&dirs));
         assert_eq!(installed_interval(&dirs), None);
+        assert!(!remove_units(&dirs).unwrap());
         assert!(write_units(&dirs, Path::new("relative/appofholding"), Interval::Daily).is_err());
+    }
+
+    #[test]
+    fn interval_is_read_back_from_the_timer() {
+        for iv in [Interval::Hourly, Interval::Daily, Interval::Weekly] {
+            assert_eq!(interval_of_timer(&timer_text(iv)), Some(iv));
+            assert_eq!(Interval::parse(iv.as_str()), Some(iv));
+        }
+        assert_eq!(interval_of_timer("[Timer]\nOnCalendar=*-*-* 04:00\n"), None);
+        assert_eq!(interval_of_timer("[Timer]\n"), None);
     }
 }

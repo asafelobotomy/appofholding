@@ -1,0 +1,8 @@
+# "Check for update" on the menu entries appOFholding writes (appofholding-<id>.desktop).
+# Runs detached; the result arrives as a desktop notification.
+[App Action]
+Name=Check for update
+Icon=system-software-update
+Match=appofholding-*.desktop
+Exec=/usr/bin/appofholding check --notify --desktop-id %d
+Terminal=false

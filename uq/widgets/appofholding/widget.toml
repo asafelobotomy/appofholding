@@ -1,0 +1,27 @@
+# appOFholding's quick-settings tile for the uQ desktop: how many AppImages have an update; a
+# click opens the AppImages page in uQ Settings. Installed to
+# /usr/share/uq/shell/widgets/appofholding/ by appOFholding's package; inert without uQ.
+# Reference: docs/integrating.md in the uQ repository.
+uq_api = 1
+id = "appofholding"
+name = "AppImage updates"
+slot = "quick"
+qml = "Widget.qml"
+order = 60
+
+[requires]
+bins = ["appofholding", "uqctl"]
+
+# The library and each app's last known update status; reads the database, never the network.
+[[command]]
+id = "list"
+argv = ["/usr/bin/appofholding", "list", "--json"]
+output = "json"
+timeout_ms = 5000
+
+# Asks the running Settings app to show the AppImages page (uq/pages/appimages), or starts it.
+[[command]]
+id = "open-page"
+argv = ["/usr/bin/uqctl", "settings", "appimages"]
+output = "none"
+timeout_ms = 20000

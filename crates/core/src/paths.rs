@@ -136,6 +136,22 @@ pub fn desktop_id(id: &str) -> String {
     format!("appofholding-{id}")
 }
 
+/// The app id in a menu entry's desktop id (`appofholding-<id>.desktop`, the inverse of
+/// [`desktop_id`]); `None` for an entry appOFholding did not write. Whether that app is in the
+/// library is the caller's question.
+pub fn app_id_from_desktop_id(desktop_id: &str) -> Option<&str> {
+    let id = desktop_id
+        .strip_suffix(".desktop")
+        .unwrap_or(desktop_id)
+        .strip_prefix("appofholding-")?;
+    let ok = !id.is_empty()
+        && !id.starts_with(['-', '.'])
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    ok.then_some(id)
+}
+
 /// `Some Cool App 2.0` -> `some-cool-app-2-0`. Never empty.
 pub fn slugify(s: &str) -> String {
     let mut out = String::new();
@@ -183,5 +199,34 @@ mod tests {
         assert_eq!(slugify("Some Cool App 2.0"), "some-cool-app-2-0");
         assert_eq!(slugify("  --  "), "app");
         assert_eq!(slugify("digiKam"), "digikam");
+    }
+}
+
+#[cfg(test)]
+mod desktop_id_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_ids_map_back_to_app_ids() {
+        assert_eq!(
+            app_id_from_desktop_id(&format!("{}.desktop", desktop_id("krita"))),
+            Some("krita")
+        );
+        assert_eq!(
+            app_id_from_desktop_id("appofholding-some-cool-app-2-0.desktop"),
+            Some("some-cool-app-2-0")
+        );
+        assert_eq!(app_id_from_desktop_id("appofholding-krita"), Some("krita"));
+        for bad in [
+            "krita.desktop",
+            "appofholding-.desktop",
+            "appofholding--x.desktop",
+            "appofholding-.hidden.desktop",
+            "appofholding-a b.desktop",
+            "appofholding-../x.desktop",
+            "io.github.appofholding.desktop",
+        ] {
+            assert_eq!(app_id_from_desktop_id(bad), None, "{bad}");
+        }
     }
 }

@@ -47,6 +47,11 @@ pub mod qobject {
         #[cxx_name = "startupFiles"]
         #[qinvokable]
         fn startup_files(self: &Backend) -> QString;
+        /// The app page asked for on the command line (`--app`/`--desktop-id`, `--tab`), as
+        /// JSON {app, tab}, or "null".
+        #[cxx_name = "startupOpen"]
+        #[qinvokable]
+        fn startup_open(self: &Backend) -> QString;
         /// Started with `--tray` (from the login autostart): stay in the tray.
         #[cxx_name = "startedInTray"]
         #[qinvokable]
@@ -159,9 +164,10 @@ pub mod qobject {
         #[qsignal]
         fn progress(self: Pin<&mut Backend>, id: &QString, fraction: f64);
         /// Another start of the program handed over: files is a JSON array of AppImages to add,
-        /// show says whether to bring the window up.
+        /// show says whether to bring the window up, target is the app page to show (JSON
+        /// {app, tab}, or "null").
         #[qsignal]
-        fn activated(self: Pin<&mut Backend>, files: &QString, show: bool);
+        fn activated(self: Pin<&mut Backend>, files: &QString, show: bool, target: &QString);
     }
 
     impl cxx_qt::Threading for Backend {}
@@ -237,6 +243,9 @@ impl qobject::Backend {
     pub fn startup_files(&self) -> QString {
         q(&json!(startup_file_list()).to_string())
     }
+    pub fn startup_open(&self) -> QString {
+        q(&open_json(startup_open().as_ref()))
+    }
     pub fn started_in_tray(&self) -> bool {
         started_in_tray()
     }
@@ -256,8 +265,9 @@ impl qobject::Backend {
         let thread = self.qt_thread();
         crate::instance::listen(&path, move |req| {
             let files = json!(req.files).to_string();
+            let target = open_json(req.open.as_ref());
             let _ = thread.queue(move |mut qobj: Pin<&mut qobject::Backend>| {
-                qobj.as_mut().activated(&q(&files), req.show);
+                qobj.as_mut().activated(&q(&files), req.show, &q(&target));
             });
         });
     }
@@ -524,13 +534,28 @@ fn run_task(
     }
 }
 
+fn startup_args() -> Vec<String> {
+    std::env::args().skip(1).collect()
+}
+
 /// Files passed on the command line (e.g. by double-clicking an AppImage), as absolute paths.
 pub fn startup_file_list() -> Vec<String> {
-    std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .map(|a| service::local_path(&a).to_string_lossy().into_owned())
+    crate::instance::parse_args(&startup_args())
+        .0
+        .iter()
+        .map(|a| service::local_path(a).to_string_lossy().into_owned())
         .collect()
+}
+
+/// The app page asked for on the command line: `--app ID` or `--desktop-id
+/// appofholding-ID.desktop` (as uQ's "Launch options…" app action passes), with `--tab`.
+pub fn startup_open() -> Option<crate::instance::Open> {
+    crate::instance::parse_args(&startup_args()).1
+}
+
+fn open_json(open: Option<&crate::instance::Open>) -> String {
+    open.map_or(Value::Null, crate::instance::Open::to_json)
+        .to_string()
 }
 
 pub fn started_in_tray() -> bool {
