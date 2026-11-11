@@ -118,6 +118,25 @@ ThemedPage {
         }
 
         Section {
+            title: qsTr("Adding AppImages")
+            subtitle: qsTr("What happens to an AppImage you drop on the window or open with appOFholding. Files already in %1 are always just added.").arg(page.backend.dataDir())
+            QQC2.ComboBox {
+                readonly property var keys: ["ask", "move", "copy", "in-place"]
+                Layout.fillWidth: true
+                Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+                model: [
+                    qsTr("Ask each time"),
+                    qsTr("Move it into the apps folder"),
+                    qsTr("Copy it into the apps folder"),
+                    qsTr("Leave it where it is")
+                ]
+                currentIndex: Math.max(0, keys.indexOf(deskSection.desk.dropAction))
+                onActivated: (i) => deskSection.save("dropAction", keys[i])
+                Accessible.name: qsTr("Adding AppImages")
+            }
+        }
+
+        Section {
             title: qsTr("Automatic update checks")
             subtitle: qsTr("A background timer checks your apps for updates and installs the ones set to update automatically. Apps set to notify get one notification per new version.")
 

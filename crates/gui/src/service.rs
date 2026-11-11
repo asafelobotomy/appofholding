@@ -418,7 +418,13 @@ pub struct DesktopSettings {
     pub notify_updates: bool,
     /// Started with the session: stay in the tray instead of opening the window.
     pub start_in_tray: bool,
+    /// What to do with an AppImage dropped on the window or opened with appOFholding:
+    /// `ask`, or one of the add modes (`move`, `copy`, `in-place`).
+    pub drop_action: String,
 }
+
+/// The choices for `DesktopSettings::drop_action`; the first is the default.
+pub const DROP_ACTIONS: [&str; 4] = ["ask", "move", "copy", "in-place"];
 
 impl Default for DesktopSettings {
     fn default() -> Self {
@@ -428,6 +434,7 @@ impl Default for DesktopSettings {
             close_to_tray: false,
             notify_updates: true,
             start_in_tray: true,
+            drop_action: DROP_ACTIONS[0].to_string(),
         }
     }
 }
@@ -440,6 +447,7 @@ impl DesktopSettings {
             "closeToTray": self.close_to_tray,
             "notifyUpdates": self.notify_updates,
             "startInTray": self.start_in_tray,
+            "dropAction": self.drop_action,
         })
     }
 
@@ -452,6 +460,11 @@ impl DesktopSettings {
             close_to_tray: b("closeToTray", d.close_to_tray),
             notify_updates: b("notifyUpdates", d.notify_updates),
             start_in_tray: b("startInTray", d.start_in_tray),
+            drop_action: v
+                .get("dropAction")
+                .and_then(Value::as_str)
+                .filter(|a| DROP_ACTIONS.contains(a))
+                .map_or(d.drop_action, str::to_string),
         }
     }
 }
@@ -884,18 +897,37 @@ pub fn local_path(s: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
 }
 
-pub fn add_file(lib: &Library, path: &str) -> Res<Value> {
+/// Add one AppImage. `mode` is `move` (into the library folder), `copy` (the default) or
+/// `in-place` (leave it where it is; it stays the user's file).
+pub fn add_file(lib: &Library, path: &str, mode: &str) -> Res<Value> {
     let path = local_path(path);
+    let install = mode_from(mode)?.unwrap_or(Install::Copy);
     let rec = lib
-        .add(
-            &path,
-            &AddOptions {
-                install: Install::Copy,
-                id: None,
-            },
-        )
+        .add(&path, &AddOptions { install, id: None })
         .map_err(e)?;
-    Ok(json!({"id": rec.id, "name": rec.name}))
+    Ok(json!({"id": rec.id, "name": rec.name, "moved": install == Install::Move}))
+}
+
+/// What the window needs to know about files dropped on it before asking where they should
+/// go: for each, its absolute path, its file name, and whether it already sits in the library
+/// folder (then there is nothing to ask). Folders and missing files are left out.
+pub fn describe_drop(lib_dir: &Path, paths: &[String]) -> Value {
+    let lib_dir = std::fs::canonicalize(lib_dir).unwrap_or_else(|_| lib_dir.to_path_buf());
+    Value::Array(
+        paths
+            .iter()
+            .map(|p| local_path(p))
+            .filter(|p| p.is_file())
+            .map(|p| {
+                let real = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                json!({
+                    "path": p.display().to_string(),
+                    "name": p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    "inLibrary": real.parent() == Some(lib_dir.as_path()),
+                })
+            })
+            .collect(),
+    )
 }
 
 pub fn check_app(lib: &Library, http: &dyn appofholding_core::http::Http, id: &str) -> Res<Value> {
@@ -1075,6 +1107,60 @@ mod tests {
     }
 
     #[test]
+    fn dropped_files_are_described_and_added_by_mode() {
+        let (tmp, lib) = lib();
+        let elsewhere = tmp.path().join("Downloads");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let mk = |dir: &Path, file: &str, name: &str| {
+            let p = dir.join(file);
+            std::fs::write(&p, fixture::simple_appimage(name, None)).unwrap();
+            p.display().to_string()
+        };
+        let moved = mk(&elsewhere, "Moved.AppImage", "Moved App");
+        let copied = mk(&elsewhere, "Copied.AppImage", "Copied App");
+        let kept = mk(&elsewhere, "Kept.AppImage", "Kept App");
+        std::fs::create_dir_all(&lib.dirs.library_dir).unwrap();
+        let already = mk(&lib.dirs.library_dir, "Already.AppImage", "Already App");
+
+        let d = describe_drop(
+            &lib.dirs.library_dir,
+            &[
+                format!("file://{moved}"),
+                already.clone(),
+                elsewhere.display().to_string(), // a folder: left out
+                "/nonexistent/x.AppImage".into(),
+            ],
+        );
+        let d = d.as_array().unwrap();
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert_eq!(d[0]["name"], "Moved.AppImage");
+        assert_eq!(d[0]["inLibrary"], false);
+        assert_eq!(d[1]["inLibrary"], true);
+
+        let r = add_file(&lib, &moved, "move").unwrap();
+        assert_eq!(r["moved"], true);
+        assert!(!Path::new(&moved).exists(), "moved away");
+        assert!(lib.dirs.library_dir.join("Moved.AppImage").exists());
+
+        add_file(&lib, &copied, "copy").unwrap();
+        assert!(
+            Path::new(&copied).exists() && lib.dirs.library_dir.join("Copied.AppImage").exists()
+        );
+
+        let r = add_file(&lib, &kept, "in-place").unwrap();
+        let rec = lib.get(r["id"].as_str().unwrap()).unwrap();
+        assert!(rec.external_file && rec.appimage_path == std::fs::canonicalize(&kept).unwrap());
+
+        add_file(&lib, &already, "move").unwrap();
+        assert!(
+            Path::new(&already).exists(),
+            "already in the library: stays put"
+        );
+
+        assert!(add_file(&lib, &kept, "sideways").is_err());
+    }
+
+    #[test]
     fn desktop_settings_and_autostart() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = Dirs::with_root(tmp.path());
@@ -1082,6 +1168,7 @@ mod tests {
         assert_eq!(d["tray"], false);
         assert_eq!(d["notifyUpdates"], true);
         assert_eq!(d["autostart"], false);
+        assert_eq!(d["dropAction"], "ask");
 
         let exe = Path::new("/opt/My Apps/appofholding-gui");
         let on = json!({"tray": true, "closeToTray": true, "startInTray": true, "autostart": true});
@@ -1108,6 +1195,11 @@ mod tests {
         // Turning it off twice is fine; a relative path is refused.
         desktop_save(&dirs, &json!({"autostart": false}), exe).unwrap();
         assert!(desktop_save(&dirs, &json!({"autostart": true}), Path::new("gui")).is_err());
+
+        desktop_save(&dirs, &json!({"dropAction": "move"}), exe).unwrap();
+        assert_eq!(desktop_load(&dirs)["dropAction"], "move");
+        desktop_save(&dirs, &json!({"dropAction": "shred"}), exe).unwrap();
+        assert_eq!(desktop_load(&dirs)["dropAction"], "ask");
 
         std::fs::write(desktop_file(&dirs), "garbage").unwrap();
         assert_eq!(desktop_load(&dirs)["tray"], false);
@@ -1539,10 +1631,10 @@ mod tests {
         let (tmp, lib) = lib();
         let p = tmp.path().join("Foo.AppImage");
         std::fs::write(&p, fixture::simple_appimage("Foo App", None)).unwrap();
-        let v = add_file(&lib, &format!("file://{}", p.display())).unwrap();
+        let v = add_file(&lib, &format!("file://{}", p.display()), "").unwrap();
         assert_eq!(v["id"], "foo-app");
         assert!(
-            add_file(&lib, p.to_str().unwrap()).is_err(),
+            add_file(&lib, p.to_str().unwrap(), "").is_err(),
             "adding twice is reported"
         );
         remove_app(&lib, "foo-app", true).unwrap();

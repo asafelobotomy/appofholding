@@ -52,12 +52,17 @@ pub mod qobject {
         #[cxx_name = "startupOpen"]
         #[qinvokable]
         fn startup_open(self: &Backend) -> QString;
+        /// Files dropped on the window or opened with appOFholding (a JSON array of paths or
+        /// file:// URLs): JSON [{path, name, inLibrary}] for the ones that are files.
+        #[cxx_name = "describeDrop"]
+        #[qinvokable]
+        fn describe_drop(self: &Backend, files: &QString) -> QString;
         /// Started with `--tray` (from the login autostart): stay in the tray.
         #[cxx_name = "startedInTray"]
         #[qinvokable]
         fn started_in_tray(self: &Backend) -> bool;
         /// Tray and startup settings: {tray, minimiseToTray, closeToTray, notifyUpdates,
-        /// startInTray, autostart}.
+        /// startInTray, dropAction, autostart}.
         #[cxx_name = "desktopSettings"]
         #[qinvokable]
         fn desktop_settings(self: &Backend) -> QString;
@@ -245,6 +250,12 @@ impl qobject::Backend {
     }
     pub fn startup_open(&self) -> QString {
         q(&open_json(startup_open().as_ref()))
+    }
+    pub fn describe_drop(&self, files: &QString) -> QString {
+        json_or_err((|| {
+            let paths: Vec<String> = serde_json::from_str(&s(files)).map_err(|e| e.to_string())?;
+            with_dirs(|d| Ok(service::describe_drop(&d.library_dir, &paths)))
+        })())
     }
     pub fn started_in_tray(&self) -> bool {
         started_in_tray()
@@ -496,7 +507,8 @@ fn run_task(
         // a = link, b = asset pattern, c = channel
         "resolve" => service::resolve_link(a, b, c),
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),
-        "addFile" => with_lib(|l| service::add_file(l, a)),
+        // a = path or file:// URL, b = move | copy | in-place
+        "addFile" => with_lib(|l| service::add_file(l, a, b)),
         // a = "force" to skip the cache
         // a = options JSON {mode, replaceEntries}; b = JSON array of the chosen file paths
         "importScan" => {

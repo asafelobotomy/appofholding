@@ -211,7 +211,7 @@ Kirigami.ApplicationWindow {
         }
         // Files handed to us by the desktop (double-click, "Open with", drag onto the icon).
         var files = Util.parse(backend.startupFiles())
-        for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i], "", "")
+        root.addFiles(files)
         // An app page asked for on the command line (uQ's "Launch options…" app action).
         root.openTarget(Util.parse(backend.startupOpen()))
         backend.start("selfCheck", "", "", "", "")   // answered from a cache most of the time
@@ -230,7 +230,7 @@ Kirigami.ApplicationWindow {
         function onActivated(files, show, target) {
             if (show) root.showWindow()
             var list = Util.parse(files)
-            for (var i = 0; i < list.length; i++) backend.start("addFile", "", list[i], "", "")
+            root.addFiles(list)
             root.openTarget(Util.parse(target))
         }
 
@@ -295,7 +295,9 @@ Kirigami.ApplicationWindow {
             case "install":
                 root.reload()
                 if (ok) {
-                    root.showPassiveNotification(qsTr("Added %1").arg(data.name))
+                    root.showPassiveNotification(data.moved
+                        ? qsTr("Added %1 and moved it to %2").arg(data.name).arg(backend.dataDir())
+                        : qsTr("Added %1").arg(data.name))
                     root.openApp(data.id)
                 } else if (kind === "addFile" || !addDialog.visible) {
                     // The add dialog shows its own errors while it is open.
@@ -366,13 +368,162 @@ Kirigami.ApplicationWindow {
     pageStack.initialPage: AppsPage {}
 
     AddDialog { id: addDialog }
+
+    // ---- adding AppImages: dropped on the window, opened with appOFholding, or chosen in a dialog
+
+    // Add files (paths or file:// URLs). Ones already in the library folder are simply added;
+    // for the others, the Settings choice says whether to move, copy or keep them, or to ask.
+    function addFiles(list) {
+        if (!list || list.length === 0) return
+        var found = Util.parse(backend.describeDrop(JSON.stringify(list)))
+        if (found.error) { root.showPassiveNotification(found.error, "long"); return }
+        if (found.length === 0) {
+            root.showPassiveNotification(qsTr("Nothing to add: drop AppImage files, not folders."))
+            return
+        }
+        var outside = []
+        for (var i = 0; i < found.length; i++) {
+            if (found[i].inLibrary) backend.start("addFile", "", found[i].path, "move", "")
+            else outside.push(found[i])
+        }
+        if (outside.length === 0) return
+        var action = root.desk.dropAction || "ask"
+        if (action === "ask") {
+            placeDialog.files = outside
+            placeDialog.open()
+        } else {
+            root.addWith(outside, action)
+        }
+    }
+
+    function addWith(files, mode) {
+        for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i].path, mode, "")
+    }
+
+    // Where a dropped AppImage should live.
+    Kirigami.Dialog {
+        id: placeDialog
+        property var files: []
+        readonly property string libDir: backend.dataDir()
+        title: placeDialog.files.length === 1
+            ? qsTr("Add %1").arg(placeDialog.files[0].name)
+            : qsTr("Add %n AppImage(s)", "", placeDialog.files.length)
+        padding: Kirigami.Units.largeSpacing
+        preferredWidth: Kirigami.Units.gridUnit * 26
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: qsTr("Add")
+                icon.name: "list-add"
+                onTriggered: {
+                    var mode = moveChoice.checked ? "move" : copyChoice.checked ? "copy" : "in-place"
+                    if (rememberChoice.checked) {
+                        var d = Object.assign({}, root.desk)
+                        delete d.error
+                        d.dropAction = mode
+                        var err = backend.setDesktopSettings(JSON.stringify(d))
+                        if (err) root.showPassiveNotification(err, "long")
+                        root.reloadDesktop()
+                    }
+                    root.addWith(placeDialog.files, mode)
+                    placeDialog.close()
+                }
+            }
+        ]
+        onOpened: { moveChoice.checked = true; rememberChoice.checked = false }
+
+        ColumnLayout {
+            spacing: Kirigami.Units.smallSpacing
+            QQC2.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                visible: placeDialog.files.length > 1
+                text: placeDialog.files.map(function (f) { return f.name }).join(", ")
+                font.family: "monospace"
+            }
+            QQC2.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Where should it live?")
+                font.weight: Font.DemiBold
+                Layout.topMargin: Kirigami.Units.smallSpacing
+            }
+            QQC2.RadioButton {
+                id: moveChoice
+                checked: true
+                text: qsTr("Move it to %1 (recommended)").arg(placeDialog.libDir)
+            }
+            QQC2.RadioButton {
+                id: copyChoice
+                text: qsTr("Copy it to %1 and keep the original").arg(placeDialog.libDir)
+            }
+            QQC2.RadioButton {
+                id: keepChoice
+                text: qsTr("Leave it where it is")
+            }
+            QQC2.Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                font: Kirigami.Theme.smallFont
+                text: keepChoice.checked
+                    ? qsTr("It stays your file: removing the app from appOFholding leaves it in place. Moving or renaming it later breaks the menu entry.")
+                    : qsTr("appOFholding keeps it there with your other apps, and replaces it when an update comes.")
+            }
+            QQC2.CheckBox {
+                id: rememberChoice
+                Layout.topMargin: Kirigami.Units.smallSpacing
+                text: qsTr("Do this every time (change it in Settings)")
+            }
+        }
+    }
+
+    // Drop AppImages anywhere on the window.
+    DropArea {
+        id: dropArea
+        anchors.fill: parent
+        z: 1000
+        onEntered: (drag) => { if (!drag.hasUrls) drag.accepted = false }
+        onDropped: (drop) => {
+            if (!drop.hasUrls) return
+            var urls = []
+            for (var i = 0; i < drop.urls.length; i++) urls.push(drop.urls[i].toString())
+            drop.acceptProposedAction()
+            root.addFiles(urls)
+        }
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: Kirigami.Units.smallSpacing
+            visible: dropArea.containsDrag
+            color: Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.15)
+            border.color: Kirigami.Theme.highlightColor
+            border.width: 2
+            radius: Kirigami.Units.cornerRadius
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Icon {
+                    source: "document-import"
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.huge
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.huge
+                }
+                Kirigami.Heading {
+                    level: 2
+                    text: qsTr("Drop to add to your library")
+                    Layout.alignment: Qt.AlignHCenter
+                }
+            }
+        }
+    }
     ImportDialog { id: importDialog }
 
     FileDialog {
         id: fileDialog
         title: qsTr("Choose an AppImage")
         nameFilters: [qsTr("AppImage files (*.AppImage *.appimage)"), qsTr("All files (*)")]
-        onAccepted: backend.start("addFile", "", selectedFile.toString(), "", "")
+        onAccepted: root.addFiles([selectedFile.toString()])
     }
 
     function confirmSelfUpdate() { selfUpdateDialog.open() }

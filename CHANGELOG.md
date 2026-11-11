@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Drag and drop AppImages onto the window**, on any page. appOFholding asks where each one
+  should live: **move it** into the apps folder (the default), **copy it** there, or **leave it
+  where it is** (it then stays your file). Tick *Do this every time* to stop asking, or pick the
+  answer under Settings → *Adding AppImages*. The same choice applies to files opened with
+  appOFholding from the file manager and to *Add from a file…*; files already in the apps folder
+  are simply added. Previously a drop only worked on the app list and always copied.
 - **uQ desktop integration** (`uq/`, installed by `make install` and every package; inert
   without uQ): a quick-settings tile with the number of updates, an **AppImages** page in uQ
   Settings (the library, Check now, Update all, each app's update policy, the background check

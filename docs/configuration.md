@@ -68,7 +68,7 @@ The graphical app keeps a few settings of its own in `~/.config/appofholding/`:
 |---|---|---|
 | `gui-view` | library layout: `list`, `grid` or `compact` (saved as soon as you pick one) | `list` |
 | `gui-theme` | colour theme: `system`, `gruvbox-dark` or `gruvbox-light` (applies at the next start) | `system` |
-| `gui-desktop.json` | tray icon, minimise/close to the tray, update notifications, start in the tray | tray off, notifications on |
+| `gui-desktop.json` | tray icon, minimise/close to the tray, update notifications, start in the tray, what to do with a dropped AppImage (`ask`, `move`, `copy`, `in-place`) | tray off, notifications on, ask |
 
 **Launch at startup** is the XDG autostart entry `~/.config/autostart/io.github.appofholding.desktop`;
 with *start in the tray* it runs `appofholding-gui --tray`. Deleting any of these files goes back
