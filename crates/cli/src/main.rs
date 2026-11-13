@@ -1660,7 +1660,7 @@ fn main() -> Result<()> {
         Cmd::Suggest { id, apply, dismiss } => {
             let lib = library()?;
             if let (Some(id), Some(key)) = (&id, &apply) {
-                println!("{id}: {}", lib.apply_suggestion(id, key)?);
+                println!("{id}: {}", lib.apply_suggestion(&UreqHttp::new(), id, key)?);
                 return Ok(());
             }
             if let (Some(id), Some(key)) = (&id, &dismiss) {

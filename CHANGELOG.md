@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Find an update source for AppImages that carry no update information.** appOFholding reads
+  the hints inside the AppImage (electron-builder's `app-update.yml`, AppStream project links,
+  `io.github.OWNER.REPO`-style app ids) and offers **Get updates from …** as a suggestion; import
+  results mention it too. Accepting it confirms that the project's newest release has an
+  AppImage for this computer before saving the source. Applying suggestions in the app now runs
+  in the background.
 - **Drag and drop AppImages onto the window**, on any page. appOFholding asks where each one
   should live: **move it** into the apps folder (the default), **copy it** there, or **leave it
   where it is** (it then stays your file). Tick *Do this every time* to stop asking, or pick the

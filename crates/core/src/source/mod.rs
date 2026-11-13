@@ -365,5 +365,7 @@ fn parse_gitlab(host: &str, segs: &[String]) -> Result<Parsed> {
     Ok(parsed(src))
 }
 
+pub mod detect;
+
 #[cfg(test)]
 mod tests;

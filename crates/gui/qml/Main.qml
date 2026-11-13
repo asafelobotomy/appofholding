@@ -304,6 +304,10 @@ Kirigami.ApplicationWindow {
                     root.showPassiveNotification(payload)
                 }
                 break
+            case "applySuggestion":
+                root.reload()
+                root.showPassiveNotification(ok ? data.message : payload, ok ? "short" : "long")
+                break
             case "importRun":
                 // Also when the import dialog was closed while it ran.
                 root.reload()

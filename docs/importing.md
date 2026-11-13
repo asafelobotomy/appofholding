@@ -47,6 +47,13 @@ Menu entries are **never deleted**: with `--replace-entries` they are moved to
 back byte for byte (it will not overwrite a file that has appeared there since). An app's own
 menu entry is never touched.
 
+## Update sources
+
+An AppImage that embeds update information keeps getting updates after import. For one that
+does not, the import result says where it may be published when its metadata hints at a
+project (see [Without embedded update information](embedding-update-info.md#without-embedded-update-information));
+accepting the app's **Get updates from …** suggestion confirms and saves it.
+
 ## Your files stay yours
 
 An AppImage adopted in place is still your file. Removing the app from appOFholding keeps it;

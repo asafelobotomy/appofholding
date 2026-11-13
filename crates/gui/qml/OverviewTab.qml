@@ -22,7 +22,19 @@ ColumnLayout {
         tab.suggestions = r.error ? [] : r
     }
     onDetailChanged: loadSuggestions()
-    onAppIdChanged: loadSuggestions()
+    onAppIdChanged: { applying = ""; loadSuggestions() }
+
+    // The suggestion being applied. Applying runs as a task, since some go online first.
+    property string applying: ""
+    Connections {
+        target: tab.backend
+        function onFinished(kind, id, ok, payload) {
+            if (kind !== "applySuggestion" || id !== tab.appId) return
+            // The window reports the outcome (also when this page was closed meanwhile).
+            tab.applying = ""
+            tab.loadSuggestions()
+        }
+    }
 
     SectionCard {
         visible: tab.suggestions.length > 0
@@ -57,11 +69,17 @@ ColumnLayout {
                     PrimaryButton {
                         text: modelData.action
                         icon.name: "dialog-ok-apply"
+                        enabled: tab.applying === ""
                         onClicked: {
-                            var r = Util.parse(tab.backend.applySuggestion(tab.appId, modelData.key))
-                            applicationWindow().showPassiveNotification(r.error ? r.error : r.message, r.error ? "long" : "short")
-                            applicationWindow().reload()
+                            tab.applying = modelData.key
+                            tab.backend.start("applySuggestion", tab.appId, modelData.key, "", "")
                         }
+                    }
+                    QQC2.BusyIndicator {
+                        visible: tab.applying === modelData.key
+                        running: visible
+                        Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                        Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
                     }
                     QQC2.Button {
                         visible: modelData.dismissible

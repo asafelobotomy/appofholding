@@ -1,5 +1,6 @@
 use super::*;
 use crate::fixture::{self, Item};
+use crate::http::fake::FakeHttp;
 use crate::library::AddOptions;
 use crate::paths::Dirs;
 
@@ -44,7 +45,8 @@ fn an_electron_app_gets_wayland_and_sandbox_suggestions_that_apply_and_undo() {
     assert_eq!(keys(&s), ["electron-wayland", "chromium-sandbox"]);
 
     // Wayland: adds the preset, after which it is not suggested again.
-    lib.apply_suggestion(&id, "electron-wayland").unwrap();
+    lib.apply_suggestion(&FakeHttp::default(), &id, "electron-wayland")
+        .unwrap();
     assert!(
         lib.profile(&id, DEFAULT_PROFILE)
             .unwrap()
@@ -55,14 +57,16 @@ fn an_electron_app_gets_wayland_and_sandbox_suggestions_that_apply_and_undo() {
     // Sandbox: the menu entry loses the app's own --no-sandbox ...
     let entry = || fs::read_to_string(lib.get(&id).unwrap().desktop_file).unwrap();
     assert!(entry().contains("--no-sandbox"));
-    lib.apply_suggestion(&id, "chromium-sandbox").unwrap();
+    lib.apply_suggestion(&FakeHttp::default(), &id, "chromium-sandbox")
+        .unwrap();
     assert!(!entry().contains("--no-sandbox"), "{}", entry());
     assert_eq!(
         keys(&lib.suggestions(&id, &LINUX_DESKTOP).unwrap()),
         ["chromium-sandbox-off"]
     );
     // ... and getting it back is one click, after which it is not offered again.
-    lib.apply_suggestion(&id, "chromium-sandbox-off").unwrap();
+    lib.apply_suggestion(&FakeHttp::default(), &id, "chromium-sandbox-off")
+        .unwrap();
     assert!(entry().contains("--no-sandbox"));
     assert!(lib.suggestions(&id, &LINUX_DESKTOP).unwrap().is_empty());
 }
@@ -115,7 +119,8 @@ fn an_old_runtime_without_libfuse2_is_unpacked_instead() {
         libfuse2: false,
     };
     assert_eq!(keys(&lib.suggestions(&id, &no_fuse).unwrap()), ["unpack"]);
-    lib.apply_suggestion(&id, "unpack").unwrap();
+    lib.apply_suggestion(&FakeHttp::default(), &id, "unpack")
+        .unwrap();
     assert!(lib.profile(&id, DEFAULT_PROFILE).unwrap().extract_and_run);
     assert!(lib.suggestions(&id, &no_fuse).unwrap().is_empty());
     // With libfuse2 installed it starts fine as it is.
@@ -134,5 +139,109 @@ fn an_old_runtime_without_libfuse2_is_unpacked_instead() {
         )
         .contains(&"unpack")
     );
-    assert!(lib.apply_suggestion(&id, "nonsense").is_err());
+    assert!(
+        lib.apply_suggestion(&FakeHttp::default(), &id, "nonsense")
+            .is_err()
+    );
+}
+
+/// An app with no update info whose desktop id and AppStream data hint at GitHub.
+fn hinted_app() -> Vec<u8> {
+    fixture::build_appimage(
+        None,
+        vec![
+            Item::File(
+                "/io.github.someone.squashedname.desktop",
+                b"[Desktop Entry]\nType=Application\nName=Squashed Name\nExec=AppRun\nIcon=icon\n"
+                    .to_vec(),
+            ),
+            Item::File("/icon.png", fixture::png(256)),
+            Item::File("/AppRun", b"#!/bin/sh\nexit 0\n".to_vec()),
+        ],
+    )
+}
+
+const ONE_APPIMAGE: &str = r#"{"tag_name":"v2.0.0","prerelease":false,"draft":false,"assets":[
+    {"name":"Squashed-2.0.0-x86_64.AppImage","browser_download_url":"https://dl/a","size":1},
+    {"name":"Squashed-2.0.0-aarch64.AppImage","browser_download_url":"https://dl/b","size":1}]}"#;
+
+#[test]
+fn a_detected_update_source_is_confirmed_before_it_is_saved() {
+    if crate::assets::Arch::host() != crate::assets::Arch::X86_64 {
+        return;
+    }
+    let (_t, lib, id) = lib_with(hinted_app());
+    let s = lib.suggestions(&id, &LINUX_DESKTOP).unwrap();
+    assert_eq!(keys(&s), ["update-source"]);
+    assert_eq!(
+        s[0].title,
+        "Get updates from github.com/someone/squashedname"
+    );
+    assert!(
+        s[0].detail
+            .contains("its app id io.github.someone.squashedname")
+    );
+    assert!(s[0].detail.contains("1 other possible place"));
+
+    // Neither spelling has a usable release: nothing is saved and the error says why.
+    let none = FakeHttp::default().json(
+        "https://api.github.com/repos/someone/squashed-name/releases/latest",
+        r#"{"tag_name":"v1","prerelease":false,"draft":false,"assets":[{"name":"src.tar.gz","browser_download_url":"https://dl/s","size":1}]}"#,
+    );
+    let err = lib
+        .apply_suggestion(&none, &id, "update-source")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("github.com/someone/squashedname"), "{err}");
+    assert!(err.contains("has no AppImage for this computer"), "{err}");
+    assert!(lib.source(&id).unwrap().is_none());
+
+    // The squashed id 404s, the name's spelling has an AppImage: that one is used.
+    let http = FakeHttp::default().json(
+        "https://api.github.com/repos/someone/squashed-name/releases/latest",
+        ONE_APPIMAGE,
+    );
+    let msg = lib.apply_suggestion(&http, &id, "update-source").unwrap();
+    assert!(msg.contains("github.com/someone/squashed-name"), "{msg}");
+    assert!(msg.contains("Squashed-2.0.0-x86_64.AppImage"), "{msg}");
+    let saved = lib.source(&id).unwrap().unwrap();
+    assert_eq!(
+        saved.source.describe(),
+        "github.com/someone/squashed-name [latest]"
+    );
+    // With a source, it is not suggested again.
+    assert!(lib.suggestions(&id, &LINUX_DESKTOP).unwrap().is_empty());
+}
+
+#[test]
+fn apps_with_embedded_update_info_get_no_source_suggestion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let lib = Library::open(Dirs::with_root(tmp.path()), tmp.path().join("x")).unwrap();
+    let p = tmp.path().join("Foo.AppImage");
+    fs::write(
+        &p,
+        fixture::simple_appimage("Foo App", Some("gh-releases-zsync|o|r|latest|Foo-*.zsync")),
+    )
+    .unwrap();
+    let id = lib.add(&p, &AddOptions::default()).unwrap().id;
+    lib.clear_source(&id).unwrap();
+    assert!(lib.suggestions(&id, &LINUX_DESKTOP).unwrap().is_empty());
+}
+
+#[test]
+fn a_dismissed_source_suggestion_stays_away() {
+    let (_t, lib, id) = lib_with(hinted_app());
+    lib.dismiss_suggestion(&id, "update-source").unwrap();
+    assert!(lib.suggestions(&id, &LINUX_DESKTOP).unwrap().is_empty());
+}
+
+#[test]
+fn the_likely_source_is_named_without_going_online() {
+    let (_t, lib, id) = lib_with(hinted_app());
+    assert_eq!(
+        lib.detected_source(&id).as_deref(),
+        Some("github.com/someone/squashedname")
+    );
+    let (_t2, lib2, id2) = lib_with(electron_like("AppRun", None));
+    assert_eq!(lib2.detected_source(&id2), None);
 }

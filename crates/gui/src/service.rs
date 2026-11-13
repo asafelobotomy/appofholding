@@ -382,8 +382,13 @@ pub fn suggestions(lib: &Library, id: &str) -> Res<Value> {
     ))
 }
 
-pub fn apply_suggestion(lib: &Library, id: &str, key: &str) -> Res<Value> {
-    let message = lib.apply_suggestion(id, key).map_err(e)?;
+pub fn apply_suggestion(
+    lib: &Library,
+    http: &dyn appofholding_core::http::Http,
+    id: &str,
+    key: &str,
+) -> Res<Value> {
+    let message = lib.apply_suggestion(http, id, key).map_err(e)?;
     Ok(json!({ "message": message }))
 }
 
@@ -1101,7 +1106,7 @@ mod tests {
         add_foo(tmp.path(), &lib);
         // A plain app: nothing to suggest, and the list is a JSON array.
         assert_eq!(suggestions(&lib, "foo-app").unwrap(), json!([]));
-        assert!(apply_suggestion(&lib, "foo-app", "nonsense").is_err());
+        assert!(apply_suggestion(&lib, &FakeHttp::default(), "foo-app", "nonsense").is_err());
         dismiss_suggestion(&lib, "foo-app", "electron-wayland").unwrap();
         assert!(suggestions(&lib, "missing").is_err());
     }

@@ -122,10 +122,6 @@ pub mod qobject {
         /// dismissible}, or {"error": ...}.
         #[qinvokable]
         fn suggestions(self: &Backend, id: &QString) -> QString;
-        /// Apply one: {"message": ...} or {"error": ...}.
-        #[cxx_name = "applySuggestion"]
-        #[qinvokable]
-        fn apply_suggestion(self: &Backend, id: &QString, key: &QString) -> QString;
         #[cxx_name = "dismissSuggestion"]
         #[qinvokable]
         fn dismiss_suggestion(self: &Backend, id: &QString, key: &QString) -> QString;
@@ -147,7 +143,7 @@ pub mod qobject {
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: notifyCheck | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun
+        // kind: notifyCheck | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun | applySuggestion
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -374,9 +370,6 @@ impl qobject::Backend {
     pub fn suggestions(&self, id: &QString) -> QString {
         json_or_err(with_lib(|l| service::suggestions(l, &s(id))))
     }
-    pub fn apply_suggestion(&self, id: &QString, key: &QString) -> QString {
-        json_or_err(with_lib(|l| service::apply_suggestion(l, &s(id), &s(key))))
-    }
     pub fn dismiss_suggestion(&self, id: &QString, key: &QString) -> QString {
         unit(with_lib(|l| {
             service::dismiss_suggestion(l, &s(id), &s(key))
@@ -537,6 +530,9 @@ fn run_task(
             &service::run_privileged,
             progress,
         ),
+        // a = suggestion key; payload {"message": ...}. A task because applying one may go
+        // online (to confirm a detected update source).
+        "applySuggestion" => with_lib(|l| service::apply_suggestion(l, &http, id, a)),
         "prepare" => with_lib(|l| {
             l.prepare_launch(id)
                 .map(|()| json!({"ok": true}))

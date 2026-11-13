@@ -93,6 +93,13 @@ pub fn execute(lib: &Library, plan: &ImportPlan, selected: &[usize]) -> Vec<Item
             Err(e) => result.outcome = Err(e.to_string()),
             Ok(rec) => {
                 let mut notes = vec![format!("imported as '{}'", rec.id)];
+                if rec.update_info.is_none()
+                    && let Some(place) = lib.detected_source(&rec.id)
+                {
+                    notes.push(format!(
+                        "no update info; it may be published at {place} (see its suggestions)"
+                    ));
+                }
                 if item.policy_manual && lib.source(&rec.id).ok().flatten().is_some() {
                     match lib.set_policy(&rec.id, Policy::Manual) {
                         Ok(()) => notes.push("automatic updates are off".into()),

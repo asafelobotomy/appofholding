@@ -8,10 +8,14 @@
 use std::fs;
 use std::path::Path;
 
+use crate::assets::{self, Arch, Selection};
 use crate::error::{Error, Result};
+use crate::http::Http;
 use crate::image::AppImage;
 use crate::launch::DEFAULT_PROFILE;
-use crate::library::{Library, inspect};
+use crate::library::{Inspection, Library, inspect};
+use crate::providers;
+use crate::source::detect::{self, Candidate};
 
 /// Setting: the user let a Chromium/Electron app use its own sandbox (its `--no-sandbox` is
 /// dropped from the menu entry).
@@ -85,8 +89,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
-fn traits(path: &Path) -> Result<Traits> {
-    let ins = inspect(path)?;
+fn traits(path: &Path, ins: &Inspection) -> Result<Traits> {
     let img = &ins.image;
     let chromium = is_chromium(img);
     let own_no_sandbox = ins
@@ -127,6 +130,42 @@ fn is_chromium(img: &AppImage) -> bool {
             .any(|(n, _)| marks(&format!("/opt/{n}")))
 }
 
+/// Where an app without a source may be published (empty when it has embedded update info:
+/// a source is then saved on adding, and a missing one means that info could not be read).
+fn source_candidates(ins: &Inspection) -> Vec<Candidate> {
+    if ins.image.update_info.is_some() {
+        return vec![];
+    }
+    detect::detect(&ins.image, &ins.desktop_path, &ins.name)
+}
+
+/// The source without its channel, as people write it.
+fn place(c: &Candidate) -> String {
+    let d = c.source.describe();
+    match d.split_once(" [") {
+        Some((p, _)) => p.to_string(),
+        None => d,
+    }
+}
+
+/// A source is only worth saving when its newest release has exactly one AppImage for this
+/// computer: otherwise the guess was wrong, or the user must choose a file pattern anyway.
+fn confirm(http: &dyn Http, c: &Candidate) -> std::result::Result<String, String> {
+    let release = providers::fetch_release(http, &c.source).map_err(|e| e.to_string())?;
+    match assets::select(&release.assets, None, Arch::host()) {
+        Selection::One(a) => Ok(a.name),
+        Selection::None => Err(format!(
+            "release {} has no AppImage for this computer",
+            release.tag
+        )),
+        Selection::Ambiguous(v) => Err(format!(
+            "release {} has {} AppImages to choose from",
+            release.tag,
+            v.len()
+        )),
+    }
+}
+
 fn mib(bytes: u64) -> u64 {
     bytes.div_ceil(1024 * 1024)
 }
@@ -136,7 +175,8 @@ impl Library {
     /// it off the interface thread for big apps.
     pub fn suggestions(&self, id: &str, host: &Host) -> Result<Vec<Suggestion>> {
         let app = self.get(id)?;
-        let t = traits(&app.appimage_path)?;
+        let ins = inspect(&app.appimage_path)?;
+        let t = traits(&app.appimage_path, &ins)?;
         let profile = self.profile(id, DEFAULT_PROFILE)?;
         let sandboxed = self.sandbox_settings(id)?.enabled();
         let dismissed = |key: &str| -> Result<bool> {
@@ -148,6 +188,31 @@ impl Library {
         let has = |p: &str| profile.presets.iter().any(|x| x == p);
         let name = &app.name;
         let mut out = Vec::new();
+
+        if self.db.get_source(id)?.is_none() && !dismissed("update-source")? {
+            let found = source_candidates(&ins);
+            if let Some(first) = found.first() {
+                let place = place(first);
+                let also = match found.len() {
+                    1 => String::new(),
+                    n => format!(
+                        " ({} other possible place{} will be tried if that one has no AppImage)",
+                        n - 1,
+                        if n == 2 { "" } else { "s" }
+                    ),
+                };
+                out.push(Suggestion {
+                    key: "update-source".into(),
+                    title: format!("Get updates from {place}"),
+                    detail: format!(
+                        "{name} does not say where its updates come from, but {} points to {place}{also}. appOFholding first checks that a release there has an AppImage for this computer.",
+                        first.evidence
+                    ),
+                    action: "Check and use it".into(),
+                    dismissible: true,
+                });
+            }
+        }
 
         if t.needs_libfuse2
             && !host.libfuse2
@@ -237,10 +302,37 @@ impl Library {
         Ok(out)
     }
 
-    /// Make the change a suggestion describes. Returns what was done, in words.
-    pub fn apply_suggestion(&self, id: &str, key: &str) -> Result<String> {
-        self.get(id)?;
+    /// Make the change a suggestion describes. Returns what was done, in words. Only
+    /// `update-source` goes online (through `http`), to confirm the source before saving it.
+    pub fn apply_suggestion(&self, http: &dyn Http, id: &str, key: &str) -> Result<String> {
+        let app = self.get(id)?;
         match key {
+            "update-source" => {
+                let ins = inspect(&app.appimage_path)?;
+                let found = source_candidates(&ins);
+                if found.is_empty() {
+                    return Err(Error::Other(
+                        "no hint about where this app is published was found".into(),
+                    ));
+                }
+                let mut tried = Vec::new();
+                for c in &found {
+                    match confirm(http, c) {
+                        Ok(asset) => {
+                            self.set_source(id, &c.source)?;
+                            return Ok(format!(
+                                "Updates now come from {} (newest release has {asset}).",
+                                place(c)
+                            ));
+                        }
+                        Err(why) => tried.push(format!("{}: {why}", place(c))),
+                    }
+                }
+                Err(Error::Source(format!(
+                    "none of the places it points to has an AppImage release for this computer, so nothing was changed. {}. Set a source by hand if you know where it is published.",
+                    tried.join("; ")
+                )))
+            }
             "unpack" => {
                 let mut p = self.profile(id, DEFAULT_PROFILE)?;
                 p.extract_and_run = true;
@@ -274,6 +366,17 @@ impl Library {
             }
             other => Err(Error::Other(format!("unknown suggestion '{other}'"))),
         }
+    }
+
+    /// The most likely place an app without a source is published, if anything inside it says
+    /// so. Offline: a guess, confirmed only when the `update-source` suggestion is applied.
+    pub fn detected_source(&self, id: &str) -> Option<String> {
+        let app = self.get(id).ok()?;
+        if self.db.get_source(id).ok()?.is_some() {
+            return None;
+        }
+        let ins = inspect(&app.appimage_path).ok()?;
+        source_candidates(&ins).first().map(place)
     }
 
     /// Stop offering a suggestion for this app.

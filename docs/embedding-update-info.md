@@ -7,6 +7,25 @@ appOFholding finds out where an app gets its updates from, in this order:
 
 Embedding it means every user gets updates with no setup.
 
+## Without embedded update information
+
+When an AppImage has none, appOFholding looks inside it for hints and, if it finds one, offers
+it as a suggestion on the app's Overview (`appofholding suggest <id>` on the command line). It
+reads, most trustworthy first:
+
+1. electron-builder's `resources/app-update.yml` (`provider: github`, `owner`, `repo`),
+2. the `<url>` links in the AppStream metadata (`usr/share/metainfo/*.xml`): `vcs-browser`,
+   then `homepage`, `bugtracker` and the rest, when they point to a GitHub, GitLab or
+   Forgejo/Codeberg repository,
+3. a reverse-DNS app id (the desktop file's name or the AppStream `<id>`) such as
+   `io.github.OWNER.REPO`, `io.gitlab.OWNER.REPO` or `page.codeberg.OWNER.REPO`, in a few
+   spellings (`_` as `-`, and the app's name when the id squashes it).
+
+Nothing is saved until you accept the suggestion. appOFholding then tries each place in turn and
+uses the first whose newest release has exactly one AppImage for this computer; if none does,
+nothing changes and the error lists what it found. Embedding the information is still better:
+it also names the release channel and the file pattern.
+
 ## What to embed
 
 The AppImage specification defines an ELF section called `.upd_info` that holds a single line.
