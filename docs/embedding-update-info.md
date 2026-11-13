@@ -15,15 +15,21 @@ reads, most trustworthy first:
 
 1. electron-builder's `resources/app-update.yml` (`provider: github`, `owner`, `repo`),
 2. the `<url>` links in the AppStream metadata (`usr/share/metainfo/*.xml`): `vcs-browser`,
-   then `homepage`, `bugtracker` and the rest, when they point to a GitHub, GitLab or
-   Forgejo/Codeberg repository,
-3. a reverse-DNS app id (the desktop file's name or the AppStream `<id>`) such as
-   `io.github.OWNER.REPO`, `io.gitlab.OWNER.REPO` or `page.codeberg.OWNER.REPO`, in a few
-   spellings (`_` as `-`, and the app's name when the id squashes it).
+   then `homepage` and `bugtracker`, when they point to a GitHub, GitLab or Forgejo/Codeberg
+   repository (`help` and `contribute` links often name someone else's project, so they are
+   not used),
+3. when neither gives anything, a link to the app's own repository inside its main program
+   (the `Exec` program; Rust programs, Tauri apps among them, usually carry one). Only a
+   repository named like the app counts, so links to the libraries it uses are ignored,
+4. reverse-DNS app ids such as `io.github.OWNER.REPO`, `io.gitlab.OWNER.REPO` or
+   `page.codeberg.OWNER.REPO`, from every desktop file's name in the image, the entry's `Icon`
+   and `StartupWMClass`, and the AppStream `<id>`, in a few spellings (`_` as `-`, and the
+   app's name when the id squashes it).
 
 Nothing is saved until you accept the suggestion. appOFholding then tries each place in turn and
-uses the first whose newest release has exactly one AppImage for this computer; if none does,
-nothing changes and the error lists what it found. Embedding the information is still better:
+uses the first whose newest release has exactly one AppImage for this computer, and only if that
+file is named like the app or is byte for byte the file you have (the same SHA-256); if none
+qualifies, nothing changes and the error lists what it found. Embedding the information is still better:
 it also names the release channel and the file pattern.
 
 ## What to embed

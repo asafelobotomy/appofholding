@@ -14,10 +14,17 @@ pub fn inspect(path: &Path) -> Result<Inspection> {
         .map(str::to_string)
         .filter(|n| !n.trim().is_empty())
         .unwrap_or_else(|| stem.clone());
+    // The entry's own version, else the newest release its AppStream metadata lists.
     let version = entry
         .main("X-AppImage-Version")
         .map(str::to_string)
-        .filter(|v| !v.is_empty());
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            let id = desktop_path.rsplit('/').next().unwrap_or("");
+            crate::appstream::for_app(&image, id)
+                .as_deref()
+                .and_then(crate::appstream::newest_release)
+        });
     let icon = icon::find_icon(&image, entry.main("Icon"))?;
     let id = slugify(&name);
     Ok(Inspection {

@@ -537,3 +537,52 @@ fn unchanged_releases_are_answered_from_the_etag_cache() {
     // A forced full check never uses the cache.
     assert!(e.lib.check(&http, "foo-app").is_ok());
 }
+
+#[test]
+fn an_imported_app_identical_to_the_release_is_up_to_date_and_remembered() {
+    // No version anywhere and no recorded digest: only the file's own hash can tell.
+    let e = env();
+    let img = fixture::build_appimage(
+        None,
+        vec![
+            fixture::Item::File(
+                "/foo.desktop",
+                b"[Desktop Entry]\nType=Application\nName=Foo App\nExec=foo\nIcon=icon\n".to_vec(),
+            ),
+            fixture::Item::File("/icon.png", fixture::png(64)),
+        ],
+    );
+    let sha = hex::encode(Sha256::digest(&img));
+    let p = e.tmp.path().join("Foo.AppImage");
+    fs::write(&p, &img).unwrap();
+    let id = e.lib.add(&p, &AddOptions::default()).unwrap().id;
+    e.lib
+        .set_source(&id, &crate::source::parse_input("o/foo").unwrap().source)
+        .unwrap();
+    let rel = |digest: &str| {
+        format!(
+            r#"{{"tag_name":"v3.0.0","prerelease":false,"draft":false,"assets":[
+              {{"name":"Foo-3.0.0-x86_64.AppImage","browser_download_url":"https://dl/x","size":1,"digest":"sha256:{digest}"}}]}}"#
+        )
+    };
+    if Arch::host() != Arch::X86_64 {
+        return;
+    }
+    // A different file is not claimed to be up to date.
+    let other = FakeHttp::default().json(API, &rel("00"));
+    assert_ne!(e.lib.check(&other, &id).unwrap().status, Status::UpToDate);
+    assert!(
+        e.lib
+            .source(&id)
+            .unwrap()
+            .unwrap()
+            .installed_digest
+            .is_none()
+    );
+
+    let same = FakeHttp::default().json(API, &rel(&sha));
+    assert_eq!(e.lib.check(&same, &id).unwrap().status, Status::UpToDate);
+    let rec = e.lib.source(&id).unwrap().unwrap();
+    assert_eq!(rec.installed_version.as_deref(), Some("v3.0.0"));
+    assert_eq!(rec.installed_digest.as_deref(), Some(sha.as_str()));
+}

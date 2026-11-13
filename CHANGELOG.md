@@ -4,10 +4,17 @@
 
 - **Find an update source for AppImages that carry no update information.** appOFholding reads
   the hints inside the AppImage (electron-builder's `app-update.yml`, AppStream project links,
-  `io.github.OWNER.REPO`-style app ids) and offers **Get updates from …** as a suggestion; import
-  results mention it too. Accepting it confirms that the project's newest release has an
-  AppImage for this computer before saving the source. Applying suggestions in the app now runs
-  in the background.
+  `io.github.OWNER.REPO`-style app ids from any of its desktop files, icon or window class, and,
+  failing those, a link to its own repository inside its program, as Tauri apps carry) and
+  offers **Get updates from …** as a suggestion; import results mention it too. Accepting it
+  confirms that the project's newest release has an AppImage for this computer, named like the
+  app or identical to the installed file, before saving the source. Applying suggestions in the
+  app now runs in the background.
+- An AppImage whose desktop entry has no `X-AppImage-Version` now shows the newest release
+  listed in its AppStream metadata as its version.
+- An update check now recognises an imported app whose file is byte for byte the newest
+  release's (same SHA-256) as up to date, and remembers that release as installed. Before, such
+  an app without a version showed as *unknown*.
 - **Drag and drop AppImages onto the window**, on any page. appOFholding asks where each one
   should live: **move it** into the apps folder (the default), **copy it** there, or **leave it
   where it is** (it then stays your file). Tick *Do this every time* to stop asking, or pick the

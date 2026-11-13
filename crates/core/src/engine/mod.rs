@@ -185,7 +185,24 @@ impl Library {
                 })
             }
             Ok(Fetched::Fresh { release, etag }) => {
-                let report = check::evaluate(release, &rec.source, &installed, Arch::host());
+                let mut report = check::evaluate(release, &rec.source, &installed, Arch::host());
+                // An app that came in from elsewhere (imported, or added before it had a
+                // source) has no recorded digest. If the release's file is byte for byte the
+                // installed one, it is up to date whatever the versions say; remember it, so
+                // later checks compare against this release.
+                let same_file = rec.installed_digest.is_none()
+                    && report
+                        .asset()
+                        .and_then(|a| a.sha256.as_deref())
+                        .is_some_and(|h| h.eq_ignore_ascii_case(&app.sha256));
+                if same_file {
+                    report.status = Status::UpToDate;
+                    self.db.record_installed(
+                        id,
+                        Some(report.latest_version()),
+                        Some(&app.sha256),
+                    )?;
+                }
                 self.db.record_check(
                     id,
                     now(),

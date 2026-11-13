@@ -162,8 +162,8 @@ fn hinted_app() -> Vec<u8> {
 }
 
 const ONE_APPIMAGE: &str = r#"{"tag_name":"v2.0.0","prerelease":false,"draft":false,"assets":[
-    {"name":"Squashed-2.0.0-x86_64.AppImage","browser_download_url":"https://dl/a","size":1},
-    {"name":"Squashed-2.0.0-aarch64.AppImage","browser_download_url":"https://dl/b","size":1}]}"#;
+    {"name":"Squashed-Name-2.0.0-x86_64.AppImage","browser_download_url":"https://dl/a","size":1},
+    {"name":"Squashed-Name-2.0.0-aarch64.AppImage","browser_download_url":"https://dl/b","size":1}]}"#;
 
 #[test]
 fn a_detected_update_source_is_confirmed_before_it_is_saved() {
@@ -203,7 +203,7 @@ fn a_detected_update_source_is_confirmed_before_it_is_saved() {
     );
     let msg = lib.apply_suggestion(&http, &id, "update-source").unwrap();
     assert!(msg.contains("github.com/someone/squashed-name"), "{msg}");
-    assert!(msg.contains("Squashed-2.0.0-x86_64.AppImage"), "{msg}");
+    assert!(msg.contains("Squashed-Name-2.0.0-x86_64.AppImage"), "{msg}");
     let saved = lib.source(&id).unwrap().unwrap();
     assert_eq!(
         saved.source.describe(),
@@ -244,4 +244,41 @@ fn the_likely_source_is_named_without_going_online() {
     );
     let (_t2, lib2, id2) = lib_with(electron_like("AppRun", None));
     assert_eq!(lib2.detected_source(&id2), None);
+}
+
+#[test]
+fn a_release_of_another_project_is_refused_unless_it_is_the_very_same_file() {
+    if crate::assets::Arch::host() != crate::assets::Arch::X86_64 {
+        return;
+    }
+    let (_t, lib, id) = lib_with(hinted_app());
+    let other = |digest: &str| {
+        format!(
+            r#"{{"tag_name":"v1","prerelease":false,"draft":false,"assets":[
+            {{"name":"search-plugins-x86_64.AppImage","browser_download_url":"https://dl/x","size":1,"digest":"{digest}"}}]}}"#
+        )
+    };
+    let url = "https://api.github.com/repos/someone/squashedname/releases/latest";
+    let err = lib
+        .apply_suggestion(
+            &FakeHttp::default().json(url, &other("sha256:00")),
+            &id,
+            "update-source",
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("does not look like this app"), "{err}");
+    assert!(lib.source(&id).unwrap().is_none());
+
+    // The same bytes as the installed file prove it, whatever the file is called.
+    let mine = lib.get(&id).unwrap().sha256;
+    let msg = lib
+        .apply_suggestion(
+            &FakeHttp::default().json(url, &other(&format!("sha256:{mine}"))),
+            &id,
+            "update-source",
+        )
+        .unwrap();
+    assert!(msg.contains("the file you have"), "{msg}");
+    assert!(lib.source(&id).unwrap().is_some());
 }

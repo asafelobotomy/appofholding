@@ -1,10 +1,13 @@
 //! Guessing where an AppImage without embedded update information is published, from what it
 //! carries inside: electron-builder's `app-update.yml`, the project links in its AppStream
-//! metadata, and reverse-DNS app ids such as `io.github.OWNER.REPO`.
+//! metadata, a link to its own repository inside its main program (Rust programs often carry
+//! one), and reverse-DNS app ids such as `io.github.OWNER.REPO`.
 //!
 //! These are only guesses. Nothing here goes online; a caller must confirm that a candidate
 //! really publishes this app as an AppImage before using it (see `Library::apply_suggestion`).
 
+use crate::appstream;
+use crate::desktop::{DesktopEntry, split_exec};
 use crate::image::AppImage;
 use crate::source::{Provider, Source, parse_input};
 
@@ -14,13 +17,54 @@ pub struct Candidate {
     pub source: Source,
     /// Where the hint came from, in words ("its electron-builder update settings").
     pub evidence: String,
+    /// The app's own update settings name it, so its files need not resemble the app's name.
+    pub trusted: bool,
 }
 
-/// Every candidate, most trustworthy first, without duplicates. `desktop_path` is the desktop
-/// entry's path inside the image and `name` the app's display name.
-pub fn detect(img: &AppImage, desktop_path: &str, name: &str) -> Vec<Candidate> {
+/// What is known about the app besides the files in its image.
+pub struct App<'a> {
+    /// The chosen desktop entry's path inside the image.
+    pub desktop_path: &'a str,
+    pub entry: &'a DesktopEntry,
+    /// Display name.
+    pub name: &'a str,
+}
+
+impl App<'_> {
+    /// The names the app goes by, lowercased with only letters and digits left: its display
+    /// name, its program, its desktop file and icon names (the last part of a reverse-DNS id).
+    /// Very short ones are left out, as they would match almost anything.
+    pub fn names(&self) -> Vec<String> {
+        let last = |s: &str| {
+            s.trim_end_matches(".desktop")
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        let mut v = vec![
+            squash(self.name),
+            squash(&program(self.entry).unwrap_or_default()),
+            squash(&last(self.desktop_path.rsplit('/').next().unwrap_or(""))),
+            squash(&last(self.entry.main("Icon").unwrap_or(""))),
+        ];
+        v.retain(|n| n.len() >= 3);
+        v.sort();
+        v.dedup();
+        v
+    }
+}
+
+/// Whether a file name (a release asset) carries one of the app's `names`.
+pub fn resembles(file_name: &str, names: &[String]) -> bool {
+    let f = squash(file_name);
+    names.iter().any(|n| f.contains(n.as_str()))
+}
+
+/// Every candidate, most trustworthy first, without duplicates.
+pub fn detect(img: &AppImage, app: &App<'_>) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
-    let mut push = |source: Source, evidence: &str| {
+    let push = |out: &mut Vec<Candidate>, source: Source, evidence: &str, trusted: bool| {
         let key = source.describe().to_ascii_lowercase();
         if !out
             .iter()
@@ -29,42 +73,162 @@ pub fn detect(img: &AppImage, desktop_path: &str, name: &str) -> Vec<Candidate> 
             out.push(Candidate {
                 source,
                 evidence: evidence.to_string(),
+                trusted,
             });
         }
     };
 
     for text in electron_update_files(img) {
         if let Some(s) = from_app_update_yml(&text) {
-            push(s, "its electron-builder update settings");
+            push(&mut out, s, "its electron-builder update settings", true);
         }
     }
 
-    let metainfo = metainfo_files(img);
+    let metainfo = appstream::files(img);
     for text in &metainfo {
-        for url in appstream_urls(text) {
+        for url in appstream::project_urls(text) {
             if let Some(s) = from_project_url(&url) {
-                push(s, "the project link in its AppStream metadata");
+                push(
+                    &mut out,
+                    s,
+                    "the project link in its AppStream metadata",
+                    false,
+                );
             }
         }
     }
 
-    let desktop_id = desktop_path
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .trim_end_matches(".desktop")
-        .to_string();
-    let mut ids = vec![desktop_id];
-    ids.extend(metainfo.iter().filter_map(|t| element(t, "id")));
-    for id in ids {
-        for s in from_reverse_dns(&id, name) {
+    // Reading the program means unpacking it (tens of MB), so only when nothing better was found.
+    let names = app.names();
+    if out.is_empty()
+        && let Some(bytes) = program_bytes(img, app.entry)
+    {
+        for s in links_in_program(&bytes, &names) {
             push(
+                &mut out,
                 s,
-                &format!("its app id {}", id.trim_end_matches(".desktop")),
+                "the link to its project inside its program",
+                false,
             );
         }
     }
+
+    for id in app_ids(img, app, &metainfo) {
+        for s in from_reverse_dns(&id, app.name) {
+            push(&mut out, s, &format!("its app id {id}"), false);
+        }
+    }
     out
+}
+
+/// Ids the app goes by, as written: its desktop files' names (an image often carries the same
+/// entry under a short name too), the entry's `Icon` and `StartupWMClass`, and AppStream ids.
+fn app_ids(img: &AppImage, app: &App<'_>, metainfo: &[String]) -> Vec<String> {
+    let stem = |p: &str| {
+        p.rsplit('/')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(".desktop")
+            .to_string()
+    };
+    let mut ids = vec![stem(app.desktop_path)];
+    for dir in ["/", "/usr/share/applications"] {
+        ids.extend(
+            img.list_dir(dir)
+                .into_iter()
+                .filter(|(n, _)| n.ends_with(".desktop"))
+                .map(|(n, _)| stem(&n)),
+        );
+    }
+    for key in ["Icon", "StartupWMClass"] {
+        ids.extend(app.entry.main(key).map(str::to_string));
+    }
+    ids.extend(
+        metainfo
+            .iter()
+            .filter_map(|t| appstream::element(t, "id"))
+            .map(|id| id.trim_end_matches(".desktop").to_string()),
+    );
+    let mut seen: Vec<String> = Vec::new();
+    ids.retain(|id| {
+        let fresh = !id.is_empty() && !seen.contains(id);
+        seen.push(id.clone());
+        fresh
+    });
+    ids
+}
+
+/// The program the desktop entry starts (`Exec`'s first word, without its folder).
+fn program(entry: &DesktopEntry) -> Option<String> {
+    let first = split_exec(entry.main("Exec")?).into_iter().next()?;
+    let name = first.rsplit('/').next()?.to_string();
+    (!name.is_empty() && name != "AppRun").then_some(name)
+}
+
+fn program_bytes(img: &AppImage, entry: &DesktopEntry) -> Option<Vec<u8>> {
+    let name = program(entry)?;
+    ["/usr/bin", "/bin", ""]
+        .iter()
+        .find_map(|dir| img.read_file(&format!("{dir}/{name}")).ok().flatten())
+}
+
+/// Links to a GitHub, GitLab or Codeberg repository inside a program whose repository name is
+/// one of the app's `names`. Programs also carry links to their libraries' repositories (Tauri,
+/// muda, ...), which the name check leaves out.
+pub(crate) fn links_in_program(bytes: &[u8], names: &[String]) -> Vec<Source> {
+    const HOSTS: [&str; 3] = ["github.com", "gitlab.com", "codeberg.org"];
+    let ok = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.');
+    let mut out: Vec<Source> = Vec::new();
+    let mut i = 0;
+    while let Some(at) = find(&bytes[i..], b"https://") {
+        let start = i + at + 8;
+        i = start;
+        let Some(host) = HOSTS
+            .iter()
+            .find(|h| bytes[start..].starts_with(h.as_bytes()))
+        else {
+            continue;
+        };
+        let mut p = start + host.len();
+        if bytes.get(p) != Some(&b'/') {
+            continue;
+        }
+        p += 1;
+        let owner_end = p + bytes[p..].iter().take_while(|c| ok(**c)).count();
+        if owner_end == p || bytes.get(owner_end) != Some(&b'/') {
+            continue;
+        }
+        let repo_start = owner_end + 1;
+        let repo_end = repo_start + bytes[repo_start..].iter().take_while(|c| ok(**c)).count();
+        let owner = String::from_utf8_lossy(&bytes[p..owner_end]).into_owned();
+        let repo = String::from_utf8_lossy(&bytes[repo_start..repo_end]);
+        let repo = repo.trim_end_matches('.');
+        let repo = repo.strip_suffix(".git").unwrap_or(repo);
+        if !names.contains(&squash(repo)) {
+            continue;
+        }
+        if let Some(s) = from_project_url(&format!("https://{host}/{owner}/{repo}"))
+            && !out
+                .iter()
+                .any(|o| o.describe().eq_ignore_ascii_case(&s.describe()))
+        {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    let first = needle[0];
+    let mut from = 0;
+    while let Some(off) = hay[from..].iter().position(|&b| b == first) {
+        let at = from + off;
+        if hay[at..].starts_with(needle) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
 }
 
 /// electron-builder writes `resources/app-update.yml` next to `app.asar`, at the top of the
@@ -83,19 +247,6 @@ fn electron_update_files(img: &AppImage) -> Vec<String> {
         .filter_map(|d| {
             let p = format!("{}/resources/app-update.yml", d.trim_end_matches('/'));
             img.read_file(&p).ok().flatten()
-        })
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .collect()
-}
-
-fn metainfo_files(img: &AppImage) -> Vec<String> {
-    ["/usr/share/metainfo", "/usr/share/appdata"]
-        .iter()
-        .flat_map(|dir| {
-            img.list_dir(dir)
-                .into_iter()
-                .filter(|(n, is_dir)| !is_dir && n.ends_with(".xml"))
-                .filter_map(move |(n, _)| img.read_file(&format!("{dir}/{n}")).ok().flatten())
         })
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .collect()
@@ -123,59 +274,6 @@ pub(crate) fn from_app_update_yml(text: &str) -> Option<Source> {
         return None;
     }
     Some(Source::new(Provider::GitHub { owner, repo }))
-}
-
-/// The `<url>` links of an AppStream file, the ones most likely to name the repository first.
-pub(crate) fn appstream_urls(text: &str) -> Vec<String> {
-    const ORDER: [&str; 5] = [
-        "vcs-browser",
-        "homepage",
-        "bugtracker",
-        "contribute",
-        "help",
-    ];
-    let mut found: Vec<(usize, String)> = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<url") {
-        rest = &rest[start + 4..];
-        let Some(gt) = rest.find('>') else { break };
-        let attrs = &rest[..gt];
-        let body = &rest[gt + 1..];
-        let Some(end) = body.find("</url>") else {
-            break;
-        };
-        let kind = attr(attrs, "type").unwrap_or_default();
-        if let Some(rank) = ORDER.iter().position(|k| *k == kind) {
-            found.push((rank, unescape(body[..end].trim())));
-        }
-        rest = &body[end..];
-    }
-    found.sort_by_key(|(rank, _)| *rank);
-    found.into_iter().map(|(_, u)| u).collect()
-}
-
-fn attr(attrs: &str, name: &str) -> Option<String> {
-    let at = attrs.find(&format!("{name}="))? + name.len() + 1;
-    let rest = &attrs[at..];
-    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-    let rest = &rest[1..];
-    Some(rest[..rest.find(quote)?].to_string())
-}
-
-/// The text of the first top-level-looking `<name>…</name>` element.
-fn element(text: &str, name: &str) -> Option<String> {
-    let open = format!("<{name}>");
-    let start = text.find(&open)? + open.len();
-    let end = text[start..].find(&format!("</{name}>"))?;
-    Some(unescape(text[start..start + end].trim())).filter(|s| !s.is_empty())
-}
-
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
 }
 
 /// A link to a repository on GitHub, GitLab or a Forgejo/Gitea host, reduced to the repository

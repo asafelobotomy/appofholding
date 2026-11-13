@@ -136,7 +136,22 @@ fn source_candidates(ins: &Inspection) -> Vec<Candidate> {
     if ins.image.update_info.is_some() {
         return vec![];
     }
-    detect::detect(&ins.image, &ins.desktop_path, &ins.name)
+    detect::detect(&ins.image, &app_of(ins))
+}
+
+fn app_of(ins: &Inspection) -> detect::App<'_> {
+    detect::App {
+        desktop_path: &ins.desktop_path,
+        entry: &ins.entry,
+        name: &ins.name,
+    }
+}
+
+/// A release that confirmed a candidate.
+struct Confirmed {
+    asset: String,
+    /// The asset is byte for byte the installed file.
+    same_file: bool,
 }
 
 /// The source without its channel, as people write it.
@@ -149,11 +164,34 @@ fn place(c: &Candidate) -> String {
 }
 
 /// A source is only worth saving when its newest release has exactly one AppImage for this
-/// computer: otherwise the guess was wrong, or the user must choose a file pattern anyway.
-fn confirm(http: &dyn Http, c: &Candidate) -> std::result::Result<String, String> {
+/// computer, and that file is either the one installed (same SHA-256) or named like the app:
+/// otherwise the guess was wrong (a link to another project), or the user must choose a file
+/// pattern anyway.
+fn confirm(
+    http: &dyn Http,
+    c: &Candidate,
+    names: &[String],
+    installed_sha256: &str,
+) -> std::result::Result<Confirmed, String> {
     let release = providers::fetch_release(http, &c.source).map_err(|e| e.to_string())?;
     match assets::select(&release.assets, None, Arch::host()) {
-        Selection::One(a) => Ok(a.name),
+        Selection::One(a) => {
+            let same_file = a
+                .sha256
+                .as_deref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(installed_sha256));
+            if same_file || c.trusted || detect::resembles(&a.name, names) {
+                Ok(Confirmed {
+                    asset: a.name,
+                    same_file,
+                })
+            } else {
+                Err(format!(
+                    "its AppImage {} does not look like this app",
+                    a.name
+                ))
+            }
+        }
         Selection::None => Err(format!(
             "release {} has no AppImage for this computer",
             release.tag
@@ -315,15 +353,24 @@ impl Library {
                         "no hint about where this app is published was found".into(),
                     ));
                 }
+                let names = app_of(&ins).names();
                 let mut tried = Vec::new();
                 for c in &found {
-                    match confirm(http, c) {
-                        Ok(asset) => {
+                    match confirm(http, c, &names, &app.sha256) {
+                        Ok(ok) => {
                             self.set_source(id, &c.source)?;
-                            return Ok(format!(
-                                "Updates now come from {} (newest release has {asset}).",
-                                place(c)
-                            ));
+                            // Added before versions were read from AppStream: fill it in now.
+                            if app.version.is_none() && ins.version.is_some() {
+                                let mut rec = app.clone();
+                                rec.version = ins.version.clone();
+                                self.db.update_app(&rec)?;
+                            }
+                            let what = if ok.same_file {
+                                format!("its newest release has {}, the file you have", ok.asset)
+                            } else {
+                                format!("its newest release has {}", ok.asset)
+                            };
+                            return Ok(format!("Updates now come from {} ({what}).", place(c)));
                         }
                         Err(why) => tried.push(format!("{}: {why}", place(c))),
                     }

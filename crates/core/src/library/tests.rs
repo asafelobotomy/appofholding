@@ -312,3 +312,31 @@ fn failed_add_rolls_back_copied_file() {
     let lib_dir = &e.lib.dirs.library_dir;
     assert!(!lib_dir.exists() || fs::read_dir(lib_dir).unwrap().next().is_none());
 }
+
+#[test]
+fn the_version_falls_back_to_the_newest_appstream_release() {
+    let e = env();
+    let desktop = b"[Desktop Entry]\nType=Application\nName=Bar\nExec=bar\nIcon=icon\n".to_vec();
+    let metainfo = br#"<component><id>io.github.o.bar.desktop</id>
+        <releases><release version="0.4.1" date="2026-06-17"/><release version="0.4.2" date="2026-10-02"/></releases>
+        </component>"#
+        .to_vec();
+    let p = write_image(
+        &e,
+        "Bar.AppImage",
+        fixture::build_appimage(
+            None,
+            vec![
+                Item::File("/io.github.o.bar.desktop", desktop),
+                Item::File("/icon.png", fixture::png(64)),
+                Item::File("/usr/share/metainfo/io.github.o.bar.appdata.xml", metainfo),
+                // Another component's file does not count.
+                Item::File(
+                    "/usr/share/metainfo/plugin.metainfo.xml",
+                    br#"<component><id>plugin</id><releases><release version="9.0"/></releases></component>"#.to_vec(),
+                ),
+            ],
+        ),
+    );
+    assert_eq!(inspect(&p).unwrap().version.as_deref(), Some("0.4.2"));
+}

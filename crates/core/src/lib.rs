@@ -1,5 +1,6 @@
 //! appofholding core: AppImage parsing, library database and desktop integration.
 
+pub mod appstream;
 pub mod assets;
 pub mod check;
 pub mod config;
