@@ -3,7 +3,7 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
-// Settings, in tabs: General, Updates, App defaults, Tray & startup, About. Every control saves
+// Settings, in tabs: General, Updates, Defaults, Tray, About. Every control saves
 // as soon as it is changed; actions that change many apps at once ask first.
 ThemedPage {
     id: page
@@ -54,12 +54,14 @@ ThemedPage {
         qsTr("Never change the app")
     ]
 
+    // Short tab names: Settings often shares the window with the app list, and a long label
+    // would be cut off.
     header: QQC2.TabBar {
         id: tabs
         QQC2.TabButton { text: qsTr("General"); icon.name: "configure" }
         QQC2.TabButton { text: qsTr("Updates"); icon.name: "view-refresh" }
-        QQC2.TabButton { text: qsTr("App defaults"); icon.name: "view-list-icons" }
-        QQC2.TabButton { text: qsTr("Tray & startup"); icon.name: "preferences-desktop" }
+        QQC2.TabButton { text: qsTr("Defaults"); icon.name: "view-list-icons" }
+        QQC2.TabButton { text: qsTr("Tray"); icon.name: "preferences-desktop" }
         QQC2.TabButton { text: qsTr("About"); icon.name: "help-about" }
     }
 
@@ -196,7 +198,7 @@ ThemedPage {
                 iconName: "notifications"
                 subtitle: qsTr("With the tray icon on, appOFholding also checks every few hours itself and announces each new version once, for apps set to “Tell me”.")
                 QQC2.CheckBox {
-                    text: qsTr("Notify me when an app update is released")
+                    text: qsTr("Notify me about new app versions")
                     enabled: page.trayOn
                     checked: page.desk.notifyUpdates === true
                     onToggled: page.saveDesk("notifyUpdates", checked)
@@ -245,7 +247,7 @@ ThemedPage {
             }
         }
 
-        // ================= App defaults
+        // ================= Defaults
         ColumnLayout {
             visible: tabs.currentIndex === 2
             Layout.fillWidth: true
@@ -310,7 +312,7 @@ ThemedPage {
             }
         }
 
-        // ================= Tray & startup
+        // ================= Tray (and startup)
         ColumnLayout {
             visible: tabs.currentIndex === 3
             Layout.fillWidth: true
@@ -334,12 +336,21 @@ ThemedPage {
                 }
                 ColumnLayout {
                     Layout.leftMargin: Kirigami.Units.gridUnit
+                    Layout.fillWidth: true
                     enabled: page.trayOn
                     spacing: 0
                     QQC2.CheckBox {
-                        text: qsTr("Close to the tray (keep running when the window is closed)")
+                        text: qsTr("Close to the tray")
                         checked: page.desk.closeToTray === true
                         onToggled: page.saveDesk("closeToTray", checked)
+                    }
+                    QQC2.Label {
+                        text: qsTr("Keeps running when the window is closed.")
+                        wrapMode: Text.Wrap
+                        opacity: 0.7
+                        font: Kirigami.Theme.smallFont
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
                     }
                     // Wayland never tells a window it was minimised, so the choice would do nothing.
                     QQC2.CheckBox {
@@ -361,7 +372,7 @@ ThemedPage {
                 }
                 QQC2.CheckBox {
                     Layout.leftMargin: Kirigami.Units.gridUnit
-                    text: qsTr("Start in the tray, without opening the window")
+                    text: qsTr("Start hidden in the tray")
                     enabled: page.trayOn && page.desk.autostart === true
                     checked: page.desk.startInTray === true
                     onToggled: page.saveDesk("startInTray", checked)

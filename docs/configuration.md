@@ -55,7 +55,7 @@ Unknown keys are errors, so a typo never silently does nothing.
 ## Settings for every app
 
 A few settings apply to the whole library rather than to one app. They are kept in the library's
-database, so the window (Settings → *App defaults* and *Updates*), the command line and the
+database, so the window (Settings → *Defaults* and *Updates*), the command line and the
 background timer all follow them:
 
 | Setting | What it does | Default |

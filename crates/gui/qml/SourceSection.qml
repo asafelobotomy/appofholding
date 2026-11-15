@@ -229,7 +229,7 @@ ColumnLayout {
             readonly property var keys: ["auto", "notify", "manual", "pinned"]
             Layout.fillWidth: true
             Layout.maximumWidth: Kirigami.Units.gridUnit * 24
-            // The library-wide default (Settings → App defaults) is marked.
+            // The library-wide default (Settings → Defaults) is marked.
             readonly property string def: applicationWindow().libDefaults.policy || "notify"
             model: [
                 qsTr("Install it automatically"),

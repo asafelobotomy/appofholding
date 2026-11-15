@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Settings tabs have short names (General, Updates, Defaults, Tray, About), so they fit when
+  Settings shares the window with the app list; "Tray & startup" also showed as "Tray _…"
+  because `&` marks a keyboard shortcut. The tray options no longer run past the edge of a
+  narrow window.
+
 ## 0.7.0
 
 - **Settings for every app.** Settings → *App defaults* picks the update policy new update
