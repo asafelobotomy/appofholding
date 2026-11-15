@@ -23,7 +23,9 @@ use crate::source::{Policy, Provider, Source};
 use crate::updates::now;
 use crate::version::{Installed, Status};
 mod apply;
+mod local;
 mod schedule;
+pub use local::{LocalVersion, Relation};
 
 /// Per-app setting holding "<sha256>:<sha1>" of the installed file (see `installed_sha1`).
 const SHA1_CACHE: &str = "sha1";

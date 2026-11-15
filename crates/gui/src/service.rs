@@ -762,6 +762,15 @@ pub fn import_scan(lib: &Library, home: &Path, opts: &Value) -> Res<Value> {
                 Action::Import => ("import", String::new(), String::new()),
                 Action::Conflict { reason, alt_id } => ("conflict", reason.clone(), alt_id.clone()),
                 Action::Skip(why) => ("skip", why.clone(), String::new()),
+                Action::Update { app_id, from, to } => (
+                    "update",
+                    format!(
+                        "updates {app_id} from {} to {}",
+                        from.as_deref().unwrap_or("?"),
+                        to.as_deref().unwrap_or("?")
+                    ),
+                    app_id.clone(),
+                ),
             };
             json!({
                 "path": f.path.display().to_string(),
@@ -961,6 +970,19 @@ pub fn local_path(s: &str) -> std::path::PathBuf {
 
 /// Add one AppImage. `mode` is `move` (into the library folder), `copy` (the default) or
 /// `in-place` (leave it where it is; it stays the user's file).
+/// Update app `id` from the AppImage at `path` (a newer version the user dropped or opened):
+/// `mode` is "move" (the default) or "copy". {id, name, from, to}.
+pub fn update_from_file(lib: &Library, id: &str, path: &str, mode: &str) -> Res<Value> {
+    let path = local_path(path);
+    let install = match mode_from(mode)? {
+        Some(Install::Copy) => Install::Copy,
+        _ => Install::Move,
+    };
+    let from = lib.get(id).map_err(e)?.version;
+    let rec = lib.update_from_file(id, &path, install).map_err(e)?;
+    Ok(json!({"id": rec.id, "name": rec.name, "from": from, "to": rec.version}))
+}
+
 pub fn add_file(lib: &Library, path: &str, mode: &str) -> Res<Value> {
     let path = local_path(path);
     let install = mode_from(mode)?.unwrap_or(Install::Copy);
@@ -971,9 +993,13 @@ pub fn add_file(lib: &Library, path: &str, mode: &str) -> Res<Value> {
 }
 
 /// What the window needs to know about files dropped on it before asking where they should
-/// go: for each, its absolute path, its file name, and whether it already sits in the library
-/// folder (then there is nothing to ask). Folders and missing files are left out.
-pub fn describe_drop(lib_dir: &Path, paths: &[String]) -> Value {
+/// go: for each, its absolute path, its file name, whether it already sits in the library
+/// folder (then there is nothing to ask), and `known` when it is another version of an app
+/// already in the library ({id, name, installed, version, relation: newer | same | older |
+/// unknown}), which is offered as an update rather than added. Folders and missing files are
+/// left out.
+pub fn describe_drop(lib: &Library, paths: &[String]) -> Value {
+    let lib_dir = &lib.dirs.library_dir;
     let lib_dir = std::fs::canonicalize(lib_dir).unwrap_or_else(|_| lib_dir.to_path_buf());
     Value::Array(
         paths
@@ -982,10 +1008,20 @@ pub fn describe_drop(lib_dir: &Path, paths: &[String]) -> Value {
             .filter(|p| p.is_file())
             .map(|p| {
                 let real = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                let known = lib.local_version_of(&p).ok().flatten().map(|k| {
+                    json!({
+                        "id": k.id,
+                        "name": k.name,
+                        "installed": k.installed,
+                        "version": k.version,
+                        "relation": k.relation.as_str(),
+                    })
+                });
                 json!({
                     "path": p.display().to_string(),
                     "name": p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
                     "inLibrary": real.parent() == Some(lib_dir.as_path()),
+                    "known": known,
                 })
             })
             .collect(),
@@ -1264,7 +1300,7 @@ mod tests {
         let already = mk(&lib.dirs.library_dir, "Already.AppImage", "Already App");
 
         let d = describe_drop(
-            &lib.dirs.library_dir,
+            &lib,
             &[
                 format!("file://{moved}"),
                 already.clone(),
@@ -1278,10 +1314,22 @@ mod tests {
         assert_eq!(d[0]["inLibrary"], false);
         assert_eq!(d[1]["inLibrary"], true);
 
+        assert!(d[0]["known"].is_null());
+
         let r = add_file(&lib, &moved, "move").unwrap();
         assert_eq!(r["moved"], true);
         assert!(!Path::new(&moved).exists(), "moved away");
         assert!(lib.dirs.library_dir.join("Moved.AppImage").exists());
+
+        // Another build of an app we have is offered as an update of it, not as a new app.
+        let next = elsewhere.join("Moved-2.AppImage");
+        std::fs::write(&next, fixture::versioned_appimage("Moved App", "2.0", None)).unwrap();
+        let d = describe_drop(&lib, &[next.display().to_string()]);
+        assert_eq!(d[0]["known"]["id"], "moved-app");
+        assert_eq!(d[0]["known"]["relation"], "newer");
+        let r = update_from_file(&lib, "moved-app", &next.display().to_string(), "copy").unwrap();
+        assert_eq!(r["to"], "2.0");
+        assert!(next.exists(), "copied, not moved");
 
         add_file(&lib, &copied, "copy").unwrap();
         assert!(

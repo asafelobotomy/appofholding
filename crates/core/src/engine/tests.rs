@@ -714,3 +714,64 @@ fn only_actionable_updates_count() {
     assert!(counts_as_update(avail, Some("v3.0.0"), Some(&rec())));
     assert!(counts_as_update(avail, None, Some(&rec())));
 }
+
+#[test]
+fn a_newer_local_file_updates_the_app_like_a_download() {
+    use crate::library::Install;
+    let e = env();
+    let old = installed(&e);
+    let dl = e.tmp.path().join("dl");
+    fs::create_dir_all(&dl).unwrap();
+    let write = |name: &str, ver: &str| {
+        let p = dl.join(name);
+        fs::write(&p, fixture::versioned_appimage("Foo App", ver, Some(UPD))).unwrap();
+        p
+    };
+
+    // How files relate to the installed 1.0.0.
+    let newer = write("Foo-2.0.0-x86_64.AppImage", "2.0.0");
+    let older = write("Foo-0.9.0-x86_64.AppImage", "0.9.0");
+    let same = dl.join("copy.AppImage");
+    fs::copy(&old.appimage_path, &same).unwrap();
+    let rel = |p: &Path| e.lib.local_version_of(p).unwrap().map(|v| v.relation);
+    assert_eq!(rel(&newer), Some(Relation::Newer));
+    assert_eq!(rel(&older), Some(Relation::Older));
+    assert_eq!(rel(&same), Some(Relation::Same));
+    assert_eq!(
+        rel(&old.appimage_path),
+        None,
+        "the app's own file is no other version"
+    );
+    let other = dl.join("Bar.AppImage");
+    fs::write(
+        &other,
+        fixture::versioned_appimage("Bar App", "1.0.0", None),
+    )
+    .unwrap();
+    assert_eq!(rel(&other), None);
+    assert!(
+        e.lib
+            .update_from_file("foo-app", &other, Install::Copy)
+            .is_err()
+    );
+
+    // Copy leaves the file; the old version is kept for rollback.
+    let app = e
+        .lib
+        .update_from_file("foo-app", &newer, Install::Copy)
+        .unwrap();
+    assert!(newer.exists());
+    assert_eq!(app.version.as_deref(), Some("2.0.0"));
+    assert_eq!(e.lib.versions("foo-app").unwrap().len(), 1);
+    let src = e.lib.source("foo-app").unwrap().unwrap();
+    assert_eq!(src.installed_version.as_deref(), Some("2.0.0"));
+
+    // Move takes the file; going back to an older one is allowed when asked for.
+    let app = e
+        .lib
+        .update_from_file("foo-app", &older, Install::Move)
+        .unwrap();
+    assert!(!older.exists());
+    assert_eq!(app.version.as_deref(), Some("0.9.0"));
+    assert!(app.appimage_path.exists());
+}

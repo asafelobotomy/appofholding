@@ -323,6 +323,11 @@ Kirigami.ApplicationWindow {
                     root.showPassiveNotification(payload)
                 }
                 break
+            case "updateFromFile":
+                root.reload()
+                if (!ok) root.showPassiveNotification(payload, "long")
+                else root.showPassiveNotification(qsTr("Updated %1 to %2").arg(data.name).arg(data.to || "?"))
+                break
             case "applySuggestion":
                 root.reload()
                 root.showPassiveNotification(ok ? data.message : payload, ok ? "short" : "long")
@@ -371,8 +376,10 @@ Kirigami.ApplicationWindow {
 
     // ---- adding AppImages: dropped on the window, opened with appOFholding, or chosen in a dialog
 
-    // Add files (paths or file:// URLs). Ones already in the library folder are simply added;
-    // for the others, the Settings choice says whether to move, copy or keep them, or to ask.
+    // Add files (paths or file:// URLs). A file that is another version of an app already in
+    // the library is offered as an update of that app; one already in the library folder is
+    // simply added; for the others, the Settings choice says whether to move, copy or keep
+    // them, or to ask (moving is the default answer).
     function addFiles(list) {
         if (!list || list.length === 0) return
         var found = Util.parse(backend.describeDrop(JSON.stringify(list)))
@@ -381,11 +388,17 @@ Kirigami.ApplicationWindow {
             root.showPassiveNotification(qsTr("Nothing to add: drop AppImage files, not folders."))
             return
         }
-        var outside = []
+        var outside = [], updates = [], notes = []
         for (var i = 0; i < found.length; i++) {
-            if (found[i].inLibrary) backend.start("addFile", "", found[i].path, "move", "")
-            else outside.push(found[i])
+            var f = found[i], k = f.known
+            if (k && (k.relation === "newer" || k.relation === "unknown")) updates.push(f)
+            else if (k && k.relation === "same") notes.push(qsTr("%1 %2 is already installed.").arg(k.name).arg(k.installed || ""))
+            else if (k) notes.push(qsTr("%1 is an older version of %2 (you have %3); nothing was changed.").arg(f.name).arg(k.name).arg(k.installed || "?"))
+            else if (f.inLibrary) backend.start("addFile", "", f.path, "move", "")
+            else outside.push(f)
         }
+        if (notes.length > 0) root.showPassiveNotification(notes.join("\n"), "long")
+        if (updates.length > 0) updateDialog.offer(updates)
         if (outside.length === 0) return
         var action = root.desk.dropAction || "ask"
         if (action === "ask") {
@@ -400,11 +413,75 @@ Kirigami.ApplicationWindow {
         for (var i = 0; i < files.length; i++) backend.start("addFile", "", files[i].path, mode, "")
     }
 
-    // Where a dropped AppImage should live.
+    function rememberDropAction(mode) {
+        var d = Object.assign({}, root.desk)
+        delete d.error
+        d.dropAction = mode
+        var err = backend.setDesktopSettings(JSON.stringify(d))
+        if (err) root.showPassiveNotification(err, "long")
+        root.reloadDesktop()
+    }
+
+    // A newer version of an app we have: offer to update that app with it, one file at a time.
+    Kirigami.PromptDialog {
+        id: updateDialog
+        property var queue: []
+        readonly property var file: queue.length > 0 ? queue[0] : null
+        readonly property var known: file ? file.known : null
+        readonly property bool newer: !!known && known.relation === "newer"
+
+        function offer(files) {
+            queue = queue.concat(files)
+            if (!visible) open()
+        }
+        function next() {
+            queue = queue.slice(1)
+            if (queue.length > 0) keepOriginal.checked = root.desk.dropAction === "copy" || root.desk.dropAction === "in-place"
+            else close()
+        }
+        onOpened: keepOriginal.checked = root.desk.dropAction === "copy" || root.desk.dropAction === "in-place"
+        onRejected: queue = []
+
+        title: !known ? ""
+            : newer ? qsTr("Update %1 to %2?").arg(known.name).arg(known.version)
+            : qsTr("Replace %1 with this file?").arg(known.name)
+        subtitle: !known ? ""
+            : (newer ? qsTr("%1 is a newer version than the one you have (%2).").arg(file.name).arg(known.installed || "?")
+                     : qsTr("%1 is another build of %2; its version (%3) can't be compared with yours (%4).")
+                           .arg(file.name).arg(known.name).arg(known.version || "?").arg(known.installed || "?"))
+              + " " + qsTr("The installed version is kept so you can roll back.")
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: updateDialog.newer ? qsTr("Update") : qsTr("Replace")
+                icon.name: "software-update-available"
+                onTriggered: {
+                    var f = updateDialog.file
+                    backend.start("updateFromFile", f.known.id, f.path, keepOriginal.checked ? "copy" : "move", "")
+                    updateDialog.next()
+                }
+            },
+            Kirigami.Action {
+                text: qsTr("Not this one")
+                icon.name: "go-next"
+                visible: updateDialog.queue.length > 1
+                onTriggered: updateDialog.next()
+            }
+        ]
+        QQC2.CheckBox {
+            id: keepOriginal
+            text: qsTr("Keep the original file (install a copy)")
+        }
+    }
+
+    // Where a dropped AppImage should live. Moving it into the library is the answer offered;
+    // copying or leaving it are a click away.
     Kirigami.Dialog {
         id: placeDialog
         property var files: []
+        property bool more: false
         readonly property string libDir: root.dataDir
+        readonly property string mode: moveChoice.checked ? "move" : copyChoice.checked ? "copy" : "in-place"
         title: placeDialog.files.length === 1
             ? qsTr("Add %1").arg(placeDialog.files[0].name)
             : qsTr("Add %n AppImage(s)", "", placeDialog.files.length)
@@ -413,24 +490,27 @@ Kirigami.ApplicationWindow {
         standardButtons: Kirigami.Dialog.Cancel
         customFooterActions: [
             Kirigami.Action {
-                text: qsTr("Add")
-                icon.name: "list-add"
+                text: qsTr("Always move")
+                icon.name: "emblem-favorite"
+                tooltip: qsTr("Move this and every AppImage you add from now on (change it in Settings)")
                 onTriggered: {
-                    var mode = moveChoice.checked ? "move" : copyChoice.checked ? "copy" : "in-place"
-                    if (rememberChoice.checked) {
-                        var d = Object.assign({}, root.desk)
-                        delete d.error
-                        d.dropAction = mode
-                        var err = backend.setDesktopSettings(JSON.stringify(d))
-                        if (err) root.showPassiveNotification(err, "long")
-                        root.reloadDesktop()
-                    }
-                    root.addWith(placeDialog.files, mode)
+                    root.rememberDropAction("move")
+                    root.addWith(placeDialog.files, "move")
+                    placeDialog.close()
+                }
+            },
+            Kirigami.Action {
+                text: placeDialog.mode === "move" ? qsTr("Move")
+                    : placeDialog.mode === "copy" ? qsTr("Copy") : qsTr("Add where it is")
+                icon.name: placeDialog.mode === "in-place" ? "list-add" : "document-import"
+                onTriggered: {
+                    if (rememberChoice.checked) root.rememberDropAction(placeDialog.mode)
+                    root.addWith(placeDialog.files, placeDialog.mode)
                     placeDialog.close()
                 }
             }
         ]
-        onOpened: { moveChoice.checked = true; rememberChoice.checked = false }
+        onOpened: { moveChoice.checked = true; rememberChoice.checked = false; more = false }
 
         ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
@@ -444,37 +524,50 @@ Kirigami.ApplicationWindow {
             QQC2.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr("Where should it live?")
-                font.weight: Font.DemiBold
-                Layout.topMargin: Kirigami.Units.smallSpacing
+                text: placeDialog.mode === "in-place"
+                    ? qsTr("appOFholding adds it where it is and replaces it there when an update comes.")
+                    : (placeDialog.mode === "move"
+                        ? qsTr("appOFholding moves it to %1, keeps it there with your other apps, and replaces it when an update comes.")
+                        : qsTr("appOFholding copies it to %1, keeps the copy with your other apps, and replaces it when an update comes."))
+                      .arg(placeDialog.libDir)
             }
-            QQC2.RadioButton {
-                id: moveChoice
-                checked: true
-                text: qsTr("Move it to %1 (recommended)").arg(placeDialog.libDir)
+            QQC2.Button {
+                flat: true
+                text: placeDialog.more ? qsTr("Fewer choices") : qsTr("Other choices…")
+                icon.name: placeDialog.more ? "arrow-up" : "arrow-down"
+                onClicked: placeDialog.more = !placeDialog.more
             }
-            QQC2.RadioButton {
-                id: copyChoice
-                text: qsTr("Copy it to %1 and keep the original").arg(placeDialog.libDir)
-            }
-            QQC2.RadioButton {
-                id: keepChoice
-                text: qsTr("Leave it where it is")
-            }
-            QQC2.Label {
+            ColumnLayout {
+                visible: placeDialog.more
                 Layout.fillWidth: true
-                Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
-                wrapMode: Text.Wrap
-                opacity: 0.7
-                font: Kirigami.Theme.smallFont
-                text: keepChoice.checked
-                    ? qsTr("It stays your file: removing the app from appOFholding leaves it in place. Moving or renaming it later breaks the menu entry.")
-                    : qsTr("appOFholding keeps it there with your other apps, and replaces it when an update comes.")
-            }
-            QQC2.CheckBox {
-                id: rememberChoice
-                Layout.topMargin: Kirigami.Units.smallSpacing
-                text: qsTr("Do this every time (change it in Settings)")
+                spacing: Kirigami.Units.smallSpacing
+                QQC2.RadioButton {
+                    id: moveChoice
+                    checked: true
+                    text: qsTr("Move it (recommended)")
+                }
+                QQC2.RadioButton {
+                    id: copyChoice
+                    text: qsTr("Copy it and keep the original")
+                }
+                QQC2.RadioButton {
+                    id: keepChoice
+                    text: qsTr("Leave it where it is")
+                }
+                QQC2.Label {
+                    visible: keepChoice.checked
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.gridUnit * 1.5
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    font: Kirigami.Theme.smallFont
+                    text: qsTr("It stays your file: removing the app from appOFholding leaves it in place. Moving or renaming it later breaks the menu entry.")
+                }
+                QQC2.CheckBox {
+                    id: rememberChoice
+                    Layout.topMargin: Kirigami.Units.smallSpacing
+                    text: qsTr("Do this every time (change it in Settings)")
+                }
             }
         }
     }

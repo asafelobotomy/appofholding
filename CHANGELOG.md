@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Update an app from a file you already have.** Dropping (or opening) an AppImage that is a
+  newer version of an app in the library asks **Update X to 2.0?** and swaps it in like a
+  normal update: the file is moved into the library, the installed version is kept for
+  rollback, and the update hooks run. Dropping the same or an older version says so instead of
+  failing. On the command line: `appofholding update ID --from FILE [--copy]`, and `add` on
+  such a file points there.
+- **Importing finds newer versions too:** a loose newer copy of an installed app (for example in
+  Downloads) is offered as an update of that app, selected by default; older and same-version
+  copies are no longer offered as name clashes.
+- **Adding a dropped AppImage moves it into the library by default.** The dialog now leads with
+  **Move** and **Always move** (which stops asking); copying or leaving the file where it is are
+  under *Other choices*.
+
 ## 0.7.1
 
 - Settings tabs have short names (General, Updates, Defaults, Tray, About), so they fit when

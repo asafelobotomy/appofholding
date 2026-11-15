@@ -113,6 +113,18 @@ enum Cmd {
         /// see `appofholding defaults`).
         #[arg(long)]
         keep: Option<usize>,
+        /// Update ID from this AppImage instead of its source (a version you already
+        /// downloaded). The file is moved into place unless --copy is given.
+        #[arg(
+            long,
+            value_name = "FILE",
+            requires = "id",
+            conflicts_with = "scheduled"
+        )]
+        from: Option<PathBuf>,
+        /// With --from: leave the file where it is and install a copy.
+        #[arg(long, requires = "from")]
+        copy: bool,
     },
     /// List the previous versions kept for rollback.
     Versions { id: String },
@@ -422,7 +434,7 @@ fn import_cmd(args: ImportArgs) -> Result<()> {
     for (i, item) in plan.items.iter().enumerate() {
         let n = i + 1;
         let base = match &item.action {
-            import::Action::Import => true,
+            import::Action::Import | import::Action::Update { .. } => true,
             import::Action::Conflict { .. } => args.include_conflicts,
             import::Action::Skip(_) => false,
         };
@@ -472,6 +484,11 @@ fn import_cmd(args: ImportArgs) -> Result<()> {
                 "        needs a decision: {reason}; --include-conflicts imports it as '{alt_id}'"
             ),
             import::Action::Skip(why) => println!("        not importable: {why}"),
+            import::Action::Update { app_id, from, to } => println!(
+                "        updates '{app_id}' from {} to {}",
+                from.as_deref().unwrap_or("?"),
+                to.as_deref().unwrap_or("?")
+            ),
         }
         for n in &item.notes {
             println!("        - {n}");
@@ -1760,6 +1777,24 @@ fn main() -> Result<()> {
                          for a local file, set them later with `appofholding source set`"
                     );
                 }
+                if opts.id.is_none()
+                    && let Some(v) = lib.local_version_of(&path)?
+                {
+                    let what = match v.relation {
+                        engine::Relation::Newer => "a newer version of",
+                        engine::Relation::Older => "an older version of",
+                        engine::Relation::Same => "the version already installed of",
+                        engine::Relation::Unknown => "another build of",
+                    };
+                    bail!(
+                        "{} is {what} '{}', which is already in the library; \
+                         use `appofholding update {} --from {}` to install it",
+                        path.display(),
+                        v.id,
+                        v.id,
+                        path.display()
+                    );
+                }
                 lib.add(&path, &opts)?
             } else {
                 let parsed = build_source(&target, asset, channel)?;
@@ -2068,8 +2103,40 @@ fn main() -> Result<()> {
             force,
             defer_if_running,
             keep,
+            from,
+            copy,
         } => {
             let lib = library()?;
+            if let (Some(file), Some(id)) = (&from, &id) {
+                let found = lib.local_version_of(file)?;
+                match found.as_ref().map(|f| (f.id.as_str(), f.relation)) {
+                    Some((fid, _)) if fid != id => {
+                        bail!("{} is a version of '{fid}', not of '{id}'", file.display())
+                    }
+                    None => bail!("{} is not a version of '{id}'", file.display()),
+                    Some((_, engine::Relation::Same)) if !force => bail!(
+                        "{} is the version already installed (--force installs it anyway)",
+                        file.display()
+                    ),
+                    Some((_, engine::Relation::Older)) if !force => bail!(
+                        "{} is older than the installed version (--force installs it anyway)",
+                        file.display()
+                    ),
+                    _ => {}
+                }
+                let mode = if copy { Install::Copy } else { Install::Move };
+                let from_v = found.and_then(|f| f.installed);
+                let app = lib.update_from_file(id, file, mode)?;
+                println!(
+                    "{id}: {} -> {}",
+                    from_v.as_deref().unwrap_or("?"),
+                    app.version.as_deref().unwrap_or("?")
+                );
+                for w in lib.take_warnings() {
+                    eprintln!("warning: {w}");
+                }
+                return Ok(());
+            }
             let http = UreqHttp::new();
             if scheduled {
                 for o in lib.run_scheduled(&http, &NotifySend)? {

@@ -85,6 +85,21 @@ pub fn execute(lib: &Library, plan: &ImportPlan, selected: &[usize]) -> Vec<Item
             results.push(result);
             continue;
         }
+        if let Action::Update { app_id, from, .. } = &item.action {
+            result.id = app_id.clone();
+            result.outcome = lib
+                .update_from_file(app_id, &item.found.path, item.mode)
+                .map(|rec| {
+                    vec![format!(
+                        "updated '{app_id}' from {} to {}",
+                        from.as_deref().unwrap_or("?"),
+                        rec.version.as_deref().unwrap_or("?")
+                    )]
+                })
+                .map_err(|e| e.to_string());
+            results.push(result);
+            continue;
+        }
         let opts = AddOptions {
             install: item.mode,
             id: Some(item.id.clone()),

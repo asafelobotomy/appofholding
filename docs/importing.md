@@ -29,6 +29,14 @@ that launch an AppImage, so apps that keep their AppImage somewhere unusual are 
 Not offered: files that are not AppImages, hidden folders, anything already in the library
 (including byte-identical copies), and appOFholding's own files.
 
+**A newer version of an app you already have** (a loose file such as a fresh download) is
+offered as an **update** of that app rather than a second copy, and is selected by default:
+the file is moved into the library in place of the installed version (copied instead with
+`--mode copy` or `--mode in-place`), and the installed version is kept so you can roll back.
+An older version, or the same version as the installed one, is not offered. The same works one
+file at a time with `appofholding update ID --from FILE` (add `--copy` to keep the file), and in
+the window by dropping the file on it or opening it with appOFholding.
+
 Name clashes (two AppImages called the same, or an app already in the library) are shown as
 **needs a decision**: they are not selected by default, and `--include-conflicts` (or ticking
 them in the app) imports them under a different id such as `foo-2`.

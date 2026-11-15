@@ -147,7 +147,7 @@ pub mod qobject {
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: notifyCheck | check | update | resolve | install | addFile | selfCheck | selfUpdate | importScan | importRun | applySuggestion | suggestions | scheduleInstall | scheduleRemove
+        // kind: notifyCheck | check | update | resolve | install | addFile | selfCheck | selfUpdate | importScan | importRun | updateFromFile | applySuggestion | suggestions | scheduleInstall | scheduleRemove
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -275,7 +275,7 @@ impl qobject::Backend {
     pub fn describe_drop(&self, files: &QString) -> QString {
         json_or_err((|| {
             let paths: Vec<String> = serde_json::from_str(&s(files)).map_err(|e| e.to_string())?;
-            with_dirs(|d| Ok(service::describe_drop(&d.library_dir, &paths)))
+            with_lib(|l| Ok(service::describe_drop(l, &paths)))
         })())
     }
     pub fn started_in_tray(&self) -> bool {
@@ -552,6 +552,8 @@ fn run_task(
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),
         // a = path or file:// URL, b = move | copy | in-place
         "addFile" => with_lib(|l| service::add_file(l, a, b)),
+        // id = the app, a = the file, b = "move" or "copy"
+        "updateFromFile" => with_lib(|l| service::update_from_file(l, id, a, b)),
         // a = options JSON {mode, replaceEntries}; b = JSON array of the chosen file paths
         "importScan" => {
             let opts: Value = serde_json::from_str(a).map_err(|e| e.to_string())?;

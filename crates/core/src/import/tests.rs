@@ -528,3 +528,53 @@ fn choosing_where_to_look_and_skipped_items_are_refused() {
     let r = execute(&e.lib, &p, &[dl]);
     assert!(r[0].outcome.is_err() && e.home.join("Downloads/Dl.AppImage").exists());
 }
+
+#[test]
+fn a_newer_download_of_an_installed_app_updates_it_and_an_older_one_is_skipped() {
+    let e = env();
+    let installed = e.home.join("Apps/Ver-1.0.0.AppImage");
+    fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    fs::write(
+        &installed,
+        fixture::versioned_appimage("Ver App", "1.0.0", None),
+    )
+    .unwrap();
+    e.lib.add(&installed, &AddOptions::default()).unwrap();
+    let newer = e.home.join("Downloads/Ver-2.0.0.AppImage");
+    fs::write(
+        &newer,
+        fixture::versioned_appimage("Ver App", "2.0.0", None),
+    )
+    .unwrap();
+    let older = e.home.join("AppImages/Ver-0.5.0.AppImage");
+    fs::write(
+        &older,
+        fixture::versioned_appimage("Ver App", "0.5.0", None),
+    )
+    .unwrap();
+
+    let s = scan_all(&e);
+    let p = plan(&e.lib, &s, &e.home, &PlanOptions::default()).unwrap();
+    let item = |path: &Path| p.items.iter().position(|i| i.found.path == path).unwrap();
+    let up = item(&newer);
+    assert_eq!(
+        p.items[up].action,
+        Action::Update {
+            app_id: "ver-app".into(),
+            from: Some("1.0.0".into()),
+            to: Some("2.0.0".into())
+        }
+    );
+    assert_eq!(p.items[up].mode, Install::Move);
+    assert!(matches!(&p.items[item(&older)].action, Action::Skip(why) if why.contains("older")));
+
+    let r = execute(&e.lib, &p, &[up]);
+    assert!(r[0].outcome.is_ok(), "{r:?}");
+    assert_eq!(r[0].id, "ver-app");
+    assert_eq!(
+        e.lib.get("ver-app").unwrap().version.as_deref(),
+        Some("2.0.0")
+    );
+    assert!(!newer.exists(), "the download was moved into the library");
+    assert_eq!(e.lib.versions("ver-app").unwrap().len(), 1);
+}

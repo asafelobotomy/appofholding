@@ -78,7 +78,7 @@ Kirigami.Dialog {
                     var it = dialog.plan.items[i]
                     // The first plan selects everything that can be imported as is; later plans
                     // (after changing an option) keep what the user chose.
-                    sel[it.path] = it.action !== "skip" && (first ? it.action === "import" : !!dialog.keep[it.path])
+                    sel[it.path] = it.action !== "skip" && (first ? (it.action === "import" || it.action === "update") : !!dialog.keep[it.path])
                 }
                 dialog.selected = sel
                 dialog.phase = "plan"
@@ -260,6 +260,14 @@ Kirigami.Dialog {
                                 Layout.fillWidth: true
                                 Layout.leftMargin: Kirigami.Units.gridUnit * 2
                             }
+                        }
+                        QQC2.Label {
+                            visible: modelData.action === "update"
+                            text: qsTr("Newer than the installed version: %1. The installed version is kept so you can roll back.").arg(modelData.reason)
+                            color: Kirigami.Theme.positiveTextColor
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: Kirigami.Units.gridUnit * 2
                         }
                         QQC2.Label {
                             visible: modelData.action === "conflict"

@@ -1,6 +1,7 @@
 //! Planning an import: what to adopt, move or leave for each AppImage found.
 
 use super::*;
+use crate::engine::Relation;
 
 #[derive(Debug, Clone, Default)]
 pub struct PlanOptions {
@@ -19,6 +20,13 @@ pub enum Action {
         alt_id: String,
     },
     Skip(String),
+    /// A newer version of an app already in the library: importing it updates that app
+    /// (keeping the current version for rollback) instead of adding a second one.
+    Update {
+        app_id: String,
+        from: Option<String>,
+        to: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -102,7 +110,54 @@ pub fn plan(lib: &Library, scan: &Scan, home: &Path, opts: &PlanOptions) -> Resu
 
         let mut action = Action::Import;
         let mut id = f.id.clone();
-        if existing_ids.contains(&id) {
+        // Another version of an app we have: a newer loose file updates it, an older or equal
+        // one is no use, anything else needs a decision.
+        let known = if existing_ids.contains(&id) {
+            lib.local_version_of(&f.path).ok().flatten()
+        } else {
+            None
+        };
+        let mut mode = mode;
+        if let Some(k) = known.as_ref().filter(|k| k.id == id) {
+            match k.relation {
+                Relation::Newer if matches!(f.owner, Owner::Loose) => {
+                    // Updating takes the file into the library, unless the user asked to keep
+                    // files where they are; then a copy goes in.
+                    mode = match opts.mode {
+                        Some(Install::Copy | Install::InPlace) => Install::Copy,
+                        _ => Install::Move,
+                    };
+                    notes.clear();
+                    notes.push(match mode {
+                        Install::Move => {
+                            "the file is moved into the library in place of the installed version"
+                                .into()
+                        }
+                        _ => "a copy of the file replaces the installed version".into(),
+                    });
+                    notes.push("the installed version is kept so you can roll back".into());
+                    action = Action::Update {
+                        app_id: k.id.clone(),
+                        from: k.installed.clone(),
+                        to: k.version.clone(),
+                    };
+                }
+                Relation::Older => {
+                    action = Action::Skip(format!(
+                        "older than the installed '{}' ({})",
+                        k.id,
+                        k.installed.as_deref().unwrap_or("?")
+                    ))
+                }
+                Relation::Same => {
+                    action = Action::Skip(format!("the same version as the installed '{}'", k.id))
+                }
+                _ => {}
+            }
+        }
+        if !matches!(action, Action::Import) {
+            // Already decided: an update, or not worth importing.
+        } else if existing_ids.contains(&id) {
             action = Action::Conflict {
                 reason: format!("an app with the id '{id}' is already in the library"),
                 alt_id: unique_id(&id, &existing_ids, &taken),
@@ -117,7 +172,7 @@ pub fn plan(lib: &Library, scan: &Scan, home: &Path, opts: &PlanOptions) -> Resu
                 alt_id: unique_id(&id, &existing_ids, &taken),
             };
         }
-        if mode != Install::InPlace {
+        if mode != Install::InPlace && matches!(action, Action::Import | Action::Conflict { .. }) {
             let target = lib
                 .dirs
                 .library_dir

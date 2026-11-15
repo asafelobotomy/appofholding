@@ -1042,3 +1042,50 @@ fn defaults_are_shown_validated_and_saved() {
         serde_json::json!({"policy": "manual", "keepVersions": 4, "sandbox": "strict"})
     );
 }
+
+#[test]
+fn a_downloaded_newer_version_updates_the_app_from_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let write = |name: &str, ver: &str| {
+        let p = root.join(name);
+        fs::write(&p, fixture::versioned_appimage("Foo App", ver, None)).unwrap();
+        p
+    };
+    let v1 = write("Foo-1.0.0.AppImage", "1.0.0");
+    assert!(run(root, &["add", v1.to_str().unwrap()]).status.success());
+
+    // Adding another version is pointed at `update --from`.
+    let v2 = write("Foo-2.0.0.AppImage", "2.0.0");
+    let o = run(root, &["add", v2.to_str().unwrap()]);
+    assert!(!o.status.success());
+    assert!(
+        err(&o).contains("newer version of 'foo-app'") && err(&o).contains("--from"),
+        "{}",
+        err(&o)
+    );
+
+    // An older one needs --force.
+    let v0 = write("Foo-0.1.0.AppImage", "0.1.0");
+    let o = run(root, &["update", "foo-app", "--from", v0.to_str().unwrap()]);
+    assert!(
+        !o.status.success() && err(&o).contains("older"),
+        "{}",
+        err(&o)
+    );
+
+    let o = run(
+        root,
+        &[
+            "update",
+            "foo-app",
+            "--from",
+            v2.to_str().unwrap(),
+            "--copy",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(stdout(&o).contains("1.0.0 -> 2.0.0"), "{}", stdout(&o));
+    assert!(v2.exists(), "--copy leaves the file");
+    assert!(stdout(&run(root, &["versions", "foo-app"])).contains("1.0.0"));
+}
