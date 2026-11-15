@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
 - **Update an app from a file you already have.** Dropping (or opening) an AppImage that is a
   newer version of an app in the library asks **Update X to 2.0?** and swaps it in like a
