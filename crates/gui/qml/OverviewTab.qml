@@ -26,8 +26,17 @@ ColumnLayout {
         if (r.id !== tab.appId) return
         tab.suggestions = r.error ? [] : r.list
     }
-    onDetailChanged: loadSuggestions()
-    onAppIdChanged: { applying = ""; suggestions = []; loadSuggestions() }
+    // Finding suggestions reads the whole AppImage, so it runs again only when something it
+    // looks at changed (the file, the launch settings or the sandbox), not on every refresh.
+    property string suggestedFor
+    onDetailChanged: {
+        if (!detail.id) return
+        var key = JSON.stringify([detail.id, detail.sha, detail.size, detail.launch, detail.sandbox, detail.profiles])
+        if (key === suggestedFor) return
+        suggestedFor = key
+        loadSuggestions()
+    }
+    onAppIdChanged: { applying = ""; suggestions = []; suggestedFor = "" }
 
     // The suggestion being applied. Applying runs as a task, since some go online first.
     property string applying: ""

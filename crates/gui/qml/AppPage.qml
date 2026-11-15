@@ -211,7 +211,12 @@ ThemedPage {
         title: qsTr("Remove %1?").arg(page.d.name || page.appId)
         modal: true
         anchors.centerIn: QQC2.Overlay.overlay
-        standardButtons: QQC2.Dialog.Yes | QQC2.Dialog.Cancel
+        standardButtons: QQC2.Dialog.Ok | QQC2.Dialog.Cancel
+        Component.onCompleted: {
+            var b = standardButton(QQC2.Dialog.Ok)
+            b.text = qsTr("Remove")
+            b.icon.name = "edit-delete"
+        }
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
             QQC2.Label {

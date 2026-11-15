@@ -53,11 +53,6 @@ ThemedPage {
             text: qsTr("Add app")
             icon.name: "list-add"
             Kirigami.Action {
-                text: qsTr("Import existing AppImages…")
-                icon.name: "document-import"
-                onTriggered: applicationWindow().openImportDialog()
-            }
-            Kirigami.Action {
                 text: qsTr("From a link…")
                 icon.name: "download"
                 onTriggered: applicationWindow().openAddDialog()
@@ -67,12 +62,23 @@ ThemedPage {
                 icon.name: "document-open"
                 onTriggered: applicationWindow().openFileDialog()
             }
+            Kirigami.Action {
+                text: qsTr("Import existing AppImages…")
+                icon.name: "document-import"
+                onTriggered: applicationWindow().openImportDialog()
+            }
         },
         Kirigami.Action {
             text: qsTr("Check for updates")
             icon.name: "view-refresh"
             enabled: !applicationWindow().working
             onTriggered: applicationWindow().checkAll()
+        },
+        Kirigami.Action {
+            text: qsTr("Settings")
+            icon.name: "configure"
+            displayHint: Kirigami.DisplayHint.IconOnly
+            onTriggered: applicationWindow().openSettings()
         }
     ]
 
@@ -101,12 +107,7 @@ ThemedPage {
                           : qsTr("How to update")
                     icon.name: "update-none"
                     enabled: !busy
-                    onTriggered: {
-                        var i = selfMessage.info
-                        if (i.canInstall) applicationWindow().confirmSelfUpdate()
-                        else if (i.command) applicationWindow().showPassiveNotification(qsTr("Run in a terminal: %1").arg(i.command))
-                        else Qt.openUrlExternally(i.url)
-                    }
+                    onTriggered: applicationWindow().selfUpdateAction()
                 }
             ]
         }

@@ -5,6 +5,7 @@ pub mod assets;
 pub mod check;
 pub mod config;
 pub mod db;
+pub mod defaults;
 pub mod delta;
 pub mod desktop;
 pub mod download;

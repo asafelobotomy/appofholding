@@ -1,5 +1,5 @@
-//! The QObject the QML interface talks to. It owns no state of its own: every call opens the
-//! library, runs one function from `service`, and hands JSON back. Slow calls (network,
+//! The QObject the QML interface talks to. It owns no state of its own: every call runs one
+//! function from `service` on the library (kept open per thread) and hands JSON back. Slow calls (network,
 //! unpacking) run on a worker thread and report through the `finished` / `progress` signals.
 
 use core::pin::Pin;
@@ -67,7 +67,21 @@ pub mod qobject {
         #[qinvokable]
         fn desktop_settings(self: &Backend) -> QString;
 
+        /// Settings for every app: {policy, keepVersions, maxKeepVersions, sandbox}.
+        #[cxx_name = "libraryDefaults"]
+        #[qinvokable]
+        fn library_defaults(self: &Backend) -> QString;
+
         // ---- changes: "" on success, otherwise the error message
+        /// Change some of {policy, keepVersions, sandbox}. Lowering keepVersions deletes the
+        /// extra kept versions.
+        #[cxx_name = "setLibraryDefaults"]
+        #[qinvokable]
+        fn set_library_defaults(self: &Backend, json: &QString) -> QString;
+        /// Give every app with an update source this policy: {changed} or {error}.
+        #[cxx_name = "applyPolicyToAll"]
+        #[qinvokable]
+        fn apply_policy_to_all(self: &Backend, policy: &QString) -> QString;
         #[cxx_name = "saveProfile"]
         #[qinvokable]
         fn save_profile(self: &Backend, id: &QString, name: &QString, json: &QString) -> QString;
@@ -195,8 +209,29 @@ fn with_dirs<T>(f: impl FnOnce(&appofholding_core::Dirs) -> Res<T>) -> Res<T> {
     f(&appofholding_core::Dirs::detect().map_err(|e| e.to_string())?)
 }
 
+thread_local! {
+    /// The library, opened once per thread. The interface thread makes many small calls (every
+    /// refresh reads the list and the open page), and opening means finding the folders and the
+    /// `appofholding` binary, opening the database and checking its schema. Worker threads run
+    /// one task each, so for them this is the same as opening it per task.
+    static LIB: std::cell::RefCell<Option<appofholding_core::Library>> = const { std::cell::RefCell::new(None) };
+}
+
 fn with_lib<T>(f: impl FnOnce(&appofholding_core::Library) -> Res<T>) -> Res<T> {
-    f(&service::open_lib()?)
+    LIB.with(|cell| {
+        // Opened outside the borrow; a failure is not cached, so the next call tries again.
+        if cell.borrow().is_none() {
+            let lib = service::open_lib()?;
+            *cell.borrow_mut() = Some(lib);
+        }
+        let guard = cell.borrow();
+        let lib = guard.as_ref().expect("opened above");
+        let out = f(lib);
+        // Warnings belong to the call that made them (and are reported by it, if at all); a
+        // library kept open must not collect them forever.
+        let _ = lib.take_warnings();
+        out
+    })
 }
 
 impl qobject::Backend {
@@ -287,6 +322,18 @@ impl qobject::Backend {
             let v: Value = serde_json::from_str(&s(json)).map_err(|e| e.to_string())?;
             with_lib(|l| service::save_sandbox(l, &s(id), &v))
         })())
+    }
+    pub fn library_defaults(&self) -> QString {
+        json_or_err(with_lib(service::library_defaults))
+    }
+    pub fn set_library_defaults(&self, json: &QString) -> QString {
+        unit((|| {
+            let v: Value = serde_json::from_str(&s(json)).map_err(|e| e.to_string())?;
+            with_lib(|l| service::set_library_defaults(l, &v))
+        })())
+    }
+    pub fn apply_policy_to_all(&self, policy: &QString) -> QString {
+        json_or_err(with_lib(|l| service::apply_policy_all(l, &s(policy))))
     }
     pub fn set_policy(&self, id: &QString, policy: &QString) -> QString {
         unit(with_lib(|l| service::set_policy(l, &s(id), &s(policy))))
@@ -496,7 +543,8 @@ fn run_task(
     use appofholding_core::http::UreqHttp;
     let http = UreqHttp::new();
     match kind {
-        "notifyCheck" => with_lib(|l| service::notify_check(l, &http)),
+        // a = "force" when the user asked (not the background timer)
+        "notifyCheck" => with_lib(|l| service::notify_check(l, &http, a == "force")),
         "check" => with_lib(|l| service::check_app(l, &http, id)),
         "update" => with_lib(|l| service::update_app(l, &http, id, progress)),
         // a = link, b = asset pattern, c = channel

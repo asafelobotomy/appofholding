@@ -17,15 +17,18 @@ pub fn running_pids(appimage: &Path) -> Vec<u32> {
     let target = fs::canonicalize(appimage).unwrap_or_else(|_| appimage.to_path_buf());
     let same = |v: &Path| v == target || fs::canonicalize(v).is_ok_and(|c| c == target);
     scan(|proc, env| {
-        fs::read_link(proc.join("exe")).is_ok_and(|p| p == target)
-            || env_value(env, "APPIMAGE").is_some_and(|v| same(&v))
-            || env_value(env, HOST_APPIMAGE_VAR).is_some_and(|v| same(&v))
+        // The cheap test first; the environment is read only when it fails.
+        fs::read_link(proc.join("exe")).is_ok_and(|p| p == target) || {
+            let env = env.get();
+            env_value(env, "APPIMAGE").is_some_and(|v| same(&v))
+                || env_value(env, HOST_APPIMAGE_VAR).is_some_and(|v| same(&v))
+        }
     })
 }
 
 /// Whether a sandboxed app is running from the unpacked tree `dir`.
 pub fn tree_in_use(dir: &Path) -> bool {
-    !scan(|_, env| env_value(env, TREE_VAR).is_some_and(|v| v == dir)).is_empty()
+    !scan(|_, env| env_value(env.get(), TREE_VAR).is_some_and(|v| v == dir)).is_empty()
 }
 
 fn env_value(env: &[u8], key: &str) -> Option<PathBuf> {
@@ -36,8 +39,21 @@ fn env_value(env: &[u8], key: &str) -> Option<PathBuf> {
     })
 }
 
+/// A process's environment, read from `/proc` only if a matcher asks for it.
+struct Environ {
+    path: PathBuf,
+    data: std::cell::OnceCell<Vec<u8>>,
+}
+
+impl Environ {
+    fn get(&self) -> &[u8] {
+        self.data
+            .get_or_init(|| fs::read(&self.path).unwrap_or_default())
+    }
+}
+
 /// Our own user's processes (other than this one) for which `matches(/proc/<pid>, environ)`.
-fn scan(matches: impl Fn(&Path, &[u8]) -> bool) -> Vec<u32> {
+fn scan(matches: impl Fn(&Path, &Environ) -> bool) -> Vec<u32> {
     let me = std::process::id();
     let Ok(dir) = fs::read_dir("/proc") else {
         return vec![];
@@ -55,7 +71,10 @@ fn scan(matches: impl Fn(&Path, &[u8]) -> bool) -> Vec<u32> {
             continue;
         }
         let proc = entry.path();
-        let env = fs::read(proc.join("environ")).unwrap_or_default();
+        let env = Environ {
+            path: proc.join("environ"),
+            data: std::cell::OnceCell::new(),
+        };
         if matches(&proc, &env) {
             pids.push(pid);
         }

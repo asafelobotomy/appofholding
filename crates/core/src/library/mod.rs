@@ -191,6 +191,10 @@ impl Library {
         {
             let _ = self.db.upsert_source(&rec.id, &p.source);
         }
+        // Start it in the default sandbox, if one is chosen. Not fatal: the app is added.
+        if let Ok(rec) = &result {
+            let _ = self.apply_default_sandbox(&rec.id);
+        }
         result
     }
 

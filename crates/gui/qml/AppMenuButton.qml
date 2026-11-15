@@ -9,6 +9,9 @@ QQC2.ToolButton {
 
     icon.name: "overflow-menu"
     Accessible.name: qsTr("More actions for %1").arg(app.name)
+    QQC2.ToolTip.visible: hovered
+    QQC2.ToolTip.text: qsTr("More actions")
+    QQC2.ToolTip.delay: 600
     onClicked: menu.popup()
 
     QQC2.Menu {

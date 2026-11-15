@@ -26,8 +26,10 @@ impl Db {
             Origin::User => "user",
         };
         self.conn.execute(
-            "INSERT INTO sources (app_id,provider,host,location,channel,tag,asset_pattern,origin)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+            // A new source starts with the library's default policy; an existing one keeps its own.
+            "INSERT INTO sources (app_id,provider,host,location,channel,tag,asset_pattern,origin,policy)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,
+                     COALESCE((SELECT value FROM library_settings WHERE key='default-policy'),'notify'))
              ON CONFLICT(app_id) DO UPDATE SET provider=?2,host=?3,location=?4,channel=?5,tag=?6,asset_pattern=?7,origin=?8",
             params![app_id, provider, host, location, channel, tag, s.asset_pattern, origin],
         )?;
@@ -93,6 +95,14 @@ impl Db {
             params![app_id, p.as_str()],
         )?;
         Ok(())
+    }
+
+    /// Give every saved source the same policy. Returns how many changed.
+    pub fn set_policy_all(&self, p: Policy) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE sources SET policy=?1 WHERE policy<>?1",
+            params![p.as_str()],
+        )?)
     }
 
     pub fn set_skipped(&self, app_id: &str, v: Option<&str>) -> Result<()> {

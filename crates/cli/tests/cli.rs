@@ -995,3 +995,50 @@ fn launch_set_creates_a_profile_but_reports_a_missing_app() {
     );
     assert!(o.status.success(), "{}", err(&o));
 }
+
+#[test]
+fn defaults_are_shown_validated_and_saved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let o = run(root, &["defaults", "show", "--json"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
+    assert_eq!(v["policy"], "notify");
+    assert_eq!(v["keepVersions"], 2);
+    assert_eq!(v["sandbox"], "none");
+
+    // A bad value changes nothing, not even the good ones given with it.
+    let o = run(
+        root,
+        &["defaults", "set", "--policy", "auto", "--sandbox", "custom"],
+    );
+    assert!(!o.status.success());
+    assert!(err(&o).contains("sandbox must be"), "{}", err(&o));
+    assert!(!run(root, &["defaults", "set"]).status.success());
+    assert!(
+        !run(root, &["defaults", "set", "--keep-versions", "11"])
+            .status
+            .success()
+    );
+
+    let o = run(
+        root,
+        &[
+            "defaults",
+            "set",
+            "--policy",
+            "manual",
+            "--keep-versions",
+            "4",
+            "--sandbox",
+            "strict",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout(&run(root, &["defaults", "show", "--json"]))).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"policy": "manual", "keepVersions": 4, "sandbox": "strict"})
+    );
+}

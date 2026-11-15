@@ -231,6 +231,7 @@ Kirigami.Dialog {
                                 enabled: modelData.action !== "skip"
                                 checked: !!dialog.selected[modelData.path]
                                 onToggled: dialog.setSelected(modelData.path, checked)
+                                Accessible.name: modelData.name
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true

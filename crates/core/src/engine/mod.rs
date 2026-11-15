@@ -25,6 +25,9 @@ use crate::version::{Installed, Status};
 mod apply;
 mod schedule;
 
+/// Per-app setting holding "<sha256>:<sha1>" of the installed file (see `installed_sha1`).
+const SHA1_CACHE: &str = "sha1";
+
 /// How many previous versions to keep for rollback.
 pub const DEFAULT_KEEP_VERSIONS: usize = 2;
 
@@ -171,11 +174,27 @@ impl Library {
         {
             // zsync control files identify builds by SHA-1, so hash what is installed and
             // compare like with like (this also makes adopted apps comparable).
-            version = image::sha1_file(&app.appimage_path)
-                .ok()
-                .map(|h| format!("sha1:{h}"));
+            version = self.installed_sha1(app).map(|h| format!("sha1:{h}"));
         }
         (version, installed_digest)
+    }
+
+    /// The SHA-1 of the installed AppImage. Reading a whole AppImage takes a while, so it is
+    /// remembered with the file's SHA-256 and computed again only when the file changed.
+    fn installed_sha1(&self, app: &AppRecord) -> Option<String> {
+        let cached = self.db.get_setting(&app.id, SHA1_CACHE).ok().flatten();
+        if let Some(h) = cached
+            .as_deref()
+            .and_then(|v| v.strip_prefix(&app.sha256))
+            .and_then(|v| v.strip_prefix(':'))
+        {
+            return Some(h.to_string());
+        }
+        let h = image::sha1_file(&app.appimage_path).ok()?;
+        let _ = self
+            .db
+            .set_setting(&app.id, SHA1_CACHE, Some(&format!("{}:{h}", app.sha256)));
+        Some(h)
     }
 
     /// Decide what a fetched release means for the installed app. Besides
@@ -526,6 +545,7 @@ impl Library {
             &asset.name,
             hint,
             opts.keep_versions,
+            Some(&new_sha),
         )?;
         self.db.record_installed(id, Some(&tag), Some(&new_sha))?;
         self.db

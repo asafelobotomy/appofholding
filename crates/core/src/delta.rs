@@ -14,7 +14,15 @@ use crate::image;
 /// and SHA-256 when known, and the SHA-1 in `release_tag` when it is one (`sha1:<hex>`, as
 /// zsync sources identify builds). Returns the file's SHA-256.
 pub fn verify(out: &Path, asset: &Asset, release_tag: &str) -> Result<String> {
-    let (sha256, size) = image::hash_file(out)?;
+    let want_sha1 = release_tag.strip_prefix("sha1:");
+    // One read for both hashes when the SHA-1 matters.
+    let (sha256, sha1, size) = if want_sha1.is_some() {
+        let (a, b, n) = image::hash_file_both(out)?;
+        (a, Some(b), n)
+    } else {
+        let (a, n) = image::hash_file(out)?;
+        (a, None, n)
+    };
     if let Some(want) = asset.size
         && want != size
     {
@@ -27,8 +35,8 @@ pub fn verify(out: &Path, asset: &Asset, release_tag: &str) -> Result<String> {
     {
         return Err(Error::Source("rebuilt file has the wrong SHA-256".into()));
     }
-    if let Some(want) = release_tag.strip_prefix("sha1:")
-        && !want.eq_ignore_ascii_case(&image::sha1_file(out)?)
+    if let (Some(want), Some(got)) = (want_sha1, &sha1)
+        && !want.eq_ignore_ascii_case(got)
     {
         return Err(Error::Source("rebuilt file has the wrong SHA-1".into()));
     }

@@ -64,7 +64,7 @@ ColumnLayout {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             color: Kirigami.Theme.textColor
-            text: qsTr("This app has no update source yet. Paste a GitHub, GitLab or Forgejo link under “Update source” and it will be kept up to date.")
+            text: qsTr("This app has no update source yet. Paste a GitHub, GitLab or Forgejo link under “Update source” below and it will be kept up to date.")
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true
@@ -110,13 +110,6 @@ ColumnLayout {
                 enabled: !applicationWindow().working
                 onClicked: sec.backend.start("check", sec.appId, "", "", "")
             }
-            PrimaryButton {
-                text: qsTr("Update to %1").arg(sec.src ? sec.src.latest || "" : "")
-                icon.name: "software-update-available"
-                visible: sec.hasUpdate
-                enabled: !applicationWindow().working
-                onClicked: sec.backend.start("update", sec.appId, "", "", "")
-            }
             QQC2.Button {
                 text: qsTr("Skip this version")
                 icon.name: "dialog-cancel"
@@ -129,29 +122,6 @@ ColumnLayout {
                 visible: !!sec.src && !!sec.src.skipped
                 onClicked: { sec.notify(sec.backend.skip(sec.appId, true)); applicationWindow().reload() }
             }
-        }
-    }
-
-    // ---- behaviour
-    SectionCard {
-        visible: !!sec.src
-        title: qsTr("When a new version is found")
-        iconName: "preferences-system-time"
-        subtitle: qsTr("The background timer (see Settings) follows this: it installs the new version, tells you about it, or stays quiet. “Check now” and the tray only look; the tray tells you about apps set to “Tell me”.")
-
-        QQC2.ComboBox {
-            id: policy
-            readonly property var keys: ["auto", "notify", "manual", "pinned"]
-            Layout.fillWidth: true
-            Layout.maximumWidth: Kirigami.Units.gridUnit * 24
-            model: [
-                qsTr("Install it automatically"),
-                qsTr("Tell me (default)"),
-                qsTr("Stay quiet, I'll update myself"),
-                qsTr("Never change this app")
-            ]
-            currentIndex: sec.src ? Math.max(0, keys.indexOf(sec.src.policy)) : 1
-            onActivated: (i) => { sec.notify(sec.backend.setPolicy(sec.appId, keys[i])); applicationWindow().reload() }
         }
     }
 
@@ -247,12 +217,47 @@ ColumnLayout {
         }
     }
 
+    // ---- behaviour
+    SectionCard {
+        visible: !!sec.src
+        title: qsTr("When a new version is found")
+        iconName: "preferences-system-time"
+        subtitle: qsTr("The background timer (see Settings) follows this: it installs the new version, tells you about it, or stays quiet. “Check now” and the tray only look; the tray tells you about apps set to “Tell me”.")
+
+        QQC2.ComboBox {
+            id: policy
+            readonly property var keys: ["auto", "notify", "manual", "pinned"]
+            Layout.fillWidth: true
+            Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+            // The library-wide default (Settings → App defaults) is marked.
+            readonly property string def: applicationWindow().libDefaults.policy || "notify"
+            model: [
+                qsTr("Install it automatically"),
+                qsTr("Tell me"),
+                qsTr("Stay quiet, I'll update myself"),
+                qsTr("Never change this app")
+            ].map(function (l, i) { return keys[i] === def ? qsTr("%1 (default)").arg(l) : l })
+            Accessible.name: qsTr("When a new version is found")
+            currentIndex: sec.src ? Math.max(0, keys.indexOf(sec.src.policy)) : 1
+            onActivated: (i) => { sec.notify(sec.backend.setPolicy(sec.appId, keys[i])); applicationWindow().reload() }
+        }
+    }
+
     // ---- previous versions
     SectionCard {
-        visible: !!sec.detail.versions && sec.detail.versions.length > 0
+        readonly property int keep: applicationWindow().libDefaults.keepVersions !== undefined ? applicationWindow().libDefaults.keepVersions : 2
+        visible: !!sec.src || (!!sec.detail.versions && sec.detail.versions.length > 0)
         title: qsTr("Previous versions")
         iconName: "edit-undo"
-        subtitle: qsTr("Kept so you can go back if a new version misbehaves.")
+        subtitle: keep === 0
+            ? qsTr("Updates keep no previous version, so there is nothing to go back to.")
+            : qsTr("Each update keeps up to %n replaced version(s) so you can go back if a new one misbehaves.", "", keep)
+
+        QQC2.Label {
+            visible: !sec.detail.versions || sec.detail.versions.length === 0
+            text: qsTr("None kept yet.")
+            opacity: 0.7
+        }
 
         Repeater {
             model: sec.detail.versions || []
@@ -267,10 +272,17 @@ ColumnLayout {
                 }
             }
         }
+        QQC2.Button {
+            flat: true
+            text: qsTr("Change how many are kept…")
+            icon.name: "configure"
+            onClicked: applicationWindow().openSettings("updates")
+        }
     }
 
     // ---- hooks
     SectionCard {
+        visible: !!sec.src
         title: qsTr("Commands around updates")
         iconName: "system-run"
         subtitle: qsTr("Optional shell commands, saved when you leave the field. A failing “before” command cancels the update.")

@@ -52,6 +52,27 @@ post-update = "notify-send updated"
 
 Unknown keys are errors, so a typo never silently does nothing.
 
+## Settings for every app
+
+A few settings apply to the whole library rather than to one app. They are kept in the library's
+database, so the window (Settings → *App defaults* and *Updates*), the command line and the
+background timer all follow them:
+
+| Setting | What it does | Default |
+|---|---|---|
+| policy | the update policy a newly found update source starts with; existing apps keep theirs | `notify` |
+| keep-versions | how many previous versions an update keeps for rollback (0–10); lowering it deletes the extra ones at once | `2` |
+| sandbox | the sandbox a newly added app starts in: `none`, `standard` or `strict` | `none` |
+
+```sh
+appofholding defaults show
+appofholding defaults set --policy auto --all   # also give every existing app this policy
+appofholding defaults set --keep-versions 3 --sandbox standard
+```
+
+An `[[app]]` entry without `policy` uses the library's default when `apply` creates its source.
+These settings are not part of `export`.
+
 ## Updating appOFholding itself
 
 `appofholding self check` compares the running version with the newest GitHub release, and the

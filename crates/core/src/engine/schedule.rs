@@ -107,6 +107,7 @@ impl Library {
         if rec.policy == Policy::Auto {
             let opts = ApplyOptions {
                 if_running: IfRunning::Defer,
+                keep_versions: self.keep_versions().unwrap_or(DEFAULT_KEEP_VERSIONS),
                 ..ApplyOptions::default()
             };
             return Ok(

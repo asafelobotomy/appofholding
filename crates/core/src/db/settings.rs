@@ -29,6 +29,32 @@ impl Db {
         Ok(())
     }
 
+    /// A library-wide setting (not tied to one app).
+    pub fn get_library_setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM library_settings WHERE key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_library_setting(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => self.conn.execute(
+                "INSERT INTO library_settings (key,value) VALUES (?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value=?2",
+                params![key, v],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM library_settings WHERE key = ?1", [key])?,
+        };
+        Ok(())
+    }
+
     /// Ids of the apps that have `key` set.
     pub fn apps_with_setting(&self, key: &str) -> Result<Vec<String>> {
         let mut stmt = self

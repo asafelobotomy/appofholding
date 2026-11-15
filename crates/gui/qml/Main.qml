@@ -42,6 +42,16 @@ Kirigami.ApplicationWindow {
     // Updates the background checks have announced, for the tray's tooltip.
     property int updateCount: 0
 
+    // The library folder; read once, it does not change while we run.
+    readonly property string dataDir: backend.dataDir()
+    // Settings for every app ({policy, keepVersions, maxKeepVersions, sandbox}); see SettingsPage.
+    property var libDefaults: ({})
+    function reloadDefaults() {
+        var d = Util.parse(backend.libraryDefaults())
+        if (d.error) showPassiveNotification(d.error)
+        else libDefaults = d
+    }
+
     function reloadDesktop() {
         var d = Util.parse(backend.desktopSettings())
         root.desk = d.error ? ({}) : d
@@ -163,12 +173,19 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // The last list as the backend sent it: an unchanged list is not rebuilt (that would
+    // re-sort it and recreate every card).
+    property string appsJson
     function reload() {
-        var r = Util.parse(backend.apps())
-        apps = r.error ? [] : r
-        updateCount = countUpdates(apps)
-        if (r.error) showPassiveNotification(r.error)
-        revision++
+        var raw = backend.apps()
+        if (raw !== appsJson) {
+            appsJson = raw
+            var r = Util.parse(raw)
+            apps = r.error ? [] : r
+            updateCount = countUpdates(apps)
+            if (r.error) showPassiveNotification(r.error)
+        }
+        revision++   // open pages reload their own details, which may differ even so
     }
 
     function countUpdates(list) {
@@ -182,7 +199,7 @@ Kirigami.ApplicationWindow {
 
     function checkAll() {
         root.manualCheck = true
-        backend.start("notifyCheck", "", "", "", "")
+        backend.start("notifyCheck", "", "force", "", "")
     }
 
     readonly property var appTabs: ["overview", "updates", "launch", "sandbox"]
@@ -202,6 +219,7 @@ Kirigami.ApplicationWindow {
 
     Component.onCompleted: {
         reload()
+        reloadDefaults()
         backend.listen()
         root.trayAvailable = tray.available
         if (backend.startedInTray() && root.desk.tray === true) {
@@ -297,7 +315,7 @@ Kirigami.ApplicationWindow {
                 root.reload()
                 if (ok) {
                     root.showPassiveNotification(data.moved
-                        ? qsTr("Added %1 and moved it to %2").arg(data.name).arg(backend.dataDir())
+                        ? qsTr("Added %1 and moved it to %2").arg(data.name).arg(root.dataDir)
                         : qsTr("Added %1").arg(data.name))
                     root.openApp(data.id)
                 } else if (kind === "addFile" || !addDialog.visible) {
@@ -324,6 +342,7 @@ Kirigami.ApplicationWindow {
         title: "appOFholding"
         titleIcon: "qrc:/appofholding/app-icon.svg"
         isMenu: false
+        // Places only; the actions on apps live in the library's toolbar.
         actions: [
             Kirigami.Action {
                 text: qsTr("Apps")
@@ -331,33 +350,9 @@ Kirigami.ApplicationWindow {
                 onTriggered: { while (pageStack.depth > 1) pageStack.pop() }
             },
             Kirigami.Action {
-                text: qsTr("Add from a link…")
-                icon.name: "download"
-                onTriggered: addDialog.openDialog()
-            },
-            Kirigami.Action {
-                text: qsTr("Add from a file…")
-                icon.name: "document-open"
-                onTriggered: fileDialog.open()
-            },
-            Kirigami.Action {
-                text: qsTr("Import existing AppImages…")
-                icon.name: "document-import"
-                onTriggered: importDialog.openDialog()
-            },
-            Kirigami.Action {
-                text: qsTr("Check for updates")
-                icon.name: "view-refresh"
-                enabled: !root.working
-                onTriggered: root.checkAll()
-            },
-            Kirigami.Action {
                 text: qsTr("Settings")
                 icon.name: "configure"
-                onTriggered: {
-                    while (pageStack.depth > 1) pageStack.pop()
-                    pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
-                }
+                onTriggered: root.openSettings()
             },
             // Closing the window only hides it then, so offer a way out here too.
             Kirigami.Action {
@@ -409,7 +404,7 @@ Kirigami.ApplicationWindow {
     Kirigami.Dialog {
         id: placeDialog
         property var files: []
-        readonly property string libDir: backend.dataDir()
+        readonly property string libDir: root.dataDir
         title: placeDialog.files.length === 1
             ? qsTr("Add %1").arg(placeDialog.files[0].name)
             : qsTr("Add %n AppImage(s)", "", placeDialog.files.length)
@@ -532,6 +527,22 @@ Kirigami.ApplicationWindow {
     }
 
     function confirmSelfUpdate() { selfUpdateDialog.open() }
+
+    // "Update now" where the install can update itself, otherwise how to do it by hand.
+    function selfUpdateAction() {
+        var i = root.selfInfo
+        if (!i) return
+        if (i.canInstall) selfUpdateDialog.open()
+        else if (i.command) root.showPassiveNotification(qsTr("Run in a terminal: %1").arg(i.command), "long")
+        else Qt.openUrlExternally(i.url)
+    }
+
+    // Open Settings, optionally on a tab: "general", "updates", "defaults", "tray" or "about".
+    function openSettings(tab) {
+        while (pageStack.depth > 1) pageStack.pop()
+        var page = pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+        if (tab) page.tabIndex = Math.max(0, page.tabNames.indexOf(tab))
+    }
 
     // Updating appOFholding itself: say exactly what will happen before doing it.
     Kirigami.PromptDialog {

@@ -5,6 +5,9 @@ use super::*;
 impl Library {
     /// Put `new_file` in place of the app's current AppImage. The current file is first kept as
     /// a version for rollback. On success the database and menu entry describe the new file.
+    /// `known_sha256` is the new file's hash when the caller already computed it (a download
+    /// hashes as it goes); it is trusted only if the file is moved, not copied.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn swap_in(
         &self,
         app: &AppRecord,
@@ -13,6 +16,7 @@ impl Library {
         new_name: &str,
         version_hint: Option<&str>,
         keep: usize,
+        known_sha256: Option<&str>,
     ) -> Result<AppRecord> {
         let ins = inspect(new_file)?;
         let cur = &app.appimage_path;
@@ -66,16 +70,20 @@ impl Library {
         // 2. Stage the new file beside the destination (same filesystem => atomic rename).
         let stage = dir.join(format!(".{}.appofholding-new", file_name.to_string_lossy()));
         let staged = (|| -> Result<(String, u64)> {
-            if fs::rename(new_file, &stage).is_err() {
+            let moved = fs::rename(new_file, &stage).is_ok();
+            if !moved {
                 fs::copy(new_file, &stage).map_err(Error::io(&stage))?;
                 let _ = fs::remove_file(new_file);
             }
-            let mut perms = fs::metadata(&stage)
-                .map_err(Error::io(&stage))?
-                .permissions();
+            let meta = fs::metadata(&stage).map_err(Error::io(&stage))?;
+            let mut perms = meta.permissions();
             perms.set_mode(perms.mode() | 0o755);
             fs::set_permissions(&stage, perms).map_err(Error::io(&stage))?;
-            image::hash_file(&stage)
+            match known_sha256 {
+                // A rename keeps the very same bytes: no need to read the whole file again.
+                Some(h) if moved => Ok((h.to_string(), meta.len())),
+                _ => image::hash_file(&stage),
+            }
         })();
         let (sha256, size) = match staged {
             Ok(h) => h,
@@ -272,6 +280,7 @@ impl Library {
             &target.file_name,
             target.version.as_deref(),
             usize::MAX,
+            None,
         )?;
         self.db.delete_version(target.id)?;
         if let Some(src) = src {

@@ -57,7 +57,7 @@ Arch package, and publishes it with a source archive and `SHA256SUMS`.
 Runtime needs: `bubblewrap` and `xdg-dbus-proxy` for the sandbox; `zsync` (optional) for delta
 updates; `libnotify` (optional) for update notifications.
 
-The app follows your desktop's colours. Settings > Appearance also offers **Gruvbox light** and
+The app follows your desktop's colours. Settings > General > Appearance also offers **Gruvbox light** and
 **Gruvbox dark** (applied on the next start).
 
 ## Quick start

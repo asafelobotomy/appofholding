@@ -71,6 +71,10 @@ Rectangle {
                 source: "security-high"
                 isMask: true
                 color: row.app.sandbox === "strict" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.highlightColor
+                Accessible.name: Util.sandboxLabel(row.app.sandbox)
+                HoverHandler { id: shieldHover }
+                QQC2.ToolTip.visible: shieldHover.hovered
+                QQC2.ToolTip.text: Util.sandboxLabel(row.app.sandbox)
             }
         }
         Text {

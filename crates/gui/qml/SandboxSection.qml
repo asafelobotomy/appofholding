@@ -69,14 +69,13 @@ ColumnLayout {
                 model: [
                     {key: "none", label: qsTr("Off"), icon: "security-low", text: qsTr("Like any other program")},
                     {key: "standard", label: qsTr("Standard"), icon: "security-medium", text: qsTr("Works normally; can't see your files")},
-                    {key: "strict", label: qsTr("Strict"), icon: "security-high", text: qsTr("No network or sound as well")},
-                    {key: "custom", label: qsTr("Custom"), icon: "configure", text: qsTr("Your own mix")}
+                    {key: "strict", label: qsTr("Strict"), icon: "security-high", text: qsTr("No network or sound as well")}
                 ]
                 Rectangle {
                     id: tile
                     required property var modelData
                     readonly property bool selected: sec.s.level === modelData.key
-                    readonly property bool available: modelData.key !== "custom" || sec.s.level === "custom"
+                    readonly property bool available: true
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
                     implicitHeight: col.implicitHeight + Kirigami.Units.largeSpacing * 2
@@ -90,13 +89,10 @@ ColumnLayout {
                     Accessible.role: Accessible.RadioButton
                     Accessible.name: modelData.label
                     Accessible.checked: selected
-                    Keys.onSpacePressed: if (available && modelData.key !== "custom") sec.setLevel(modelData.key)
+                    Keys.onSpacePressed: sec.setLevel(modelData.key)
 
                     HoverHandler { id: tileHover; cursorShape: tile.available ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                    TapHandler {
-                        enabled: tile.available && tile.modelData.key !== "custom"
-                        onTapped: sec.setLevel(tile.modelData.key)
-                    }
+                    TapHandler { onTapped: sec.setLevel(tile.modelData.key) }
 
                     ColumnLayout {
                         id: col
@@ -122,13 +118,21 @@ ColumnLayout {
                 }
             }
         }
+        // Not a level to pick: what a preset becomes once you change one of its switches.
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: sec.s.level === "custom"
+            type: Kirigami.MessageType.Information
+            text: qsTr("Custom: your own mix of the switches below. Pick a level above to start again from it.")
+        }
     }
 
     // ---- permissions (only meaningful with a sandbox)
     SectionCard {
         visible: sec.enabledSandbox
-        title: qsTr("What the app may use")
+        title: qsTr("Devices")
         iconName: "preferences-system-privacy"
+        subtitle: qsTr("What the app may use.")
 
         Repeater {
             model: [
@@ -162,15 +166,17 @@ ColumnLayout {
             }
         }
 
-        Kirigami.Separator { Layout.fillWidth: true; Layout.topMargin: Kirigami.Units.smallSpacing }
+    }
+
+    // ---- talking to the rest of the desktop
+    SectionCard {
+        visible: sec.enabledSandbox
+        title: qsTr("Desktop integration")
+        iconName: "preferences-desktop"
+        subtitle: qsTr("Which desktop services the app can reach over the session bus.")
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
-            Kirigami.Icon {
-                source: "preferences-desktop"
-                Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
-                Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-            }
             QQC2.Label { text: qsTr("Desktop services"); font.weight: Font.DemiBold; Layout.fillWidth: true }
             QQC2.ComboBox {
                 readonly property var keys: ["off", "filtered", "full"]
@@ -186,11 +192,6 @@ ColumnLayout {
             visible: sec.s.bus === "full"
             type: Kirigami.MessageType.Warning
             text: qsTr("With full desktop services the app can talk to every program on your session.")
-        }
-        QQC2.CheckBox {
-            text: qsTr("Fix Chromium/Electron apps (adds --no-sandbox)")
-            checked: !!sec.s.chromium
-            onToggled: sec.change("chromium", checked)
         }
     }
 
@@ -264,6 +265,25 @@ ColumnLayout {
             text: qsTr("Share a folder…")
             icon.name: "folder-add"
             onClicked: folderDialog.open()
+        }
+    }
+
+    // ---- making apps work inside the sandbox
+    SectionCard {
+        visible: sec.enabledSandbox
+        title: qsTr("Compatibility")
+        iconName: "tools-wizard"
+        QQC2.CheckBox {
+            text: qsTr("Fix Chromium/Electron apps (adds --no-sandbox)")
+            checked: !!sec.s.chromium
+            onToggled: sec.change("chromium", checked)
+        }
+        QQC2.Label {
+            text: qsTr("Chromium's own sandbox cannot start inside this one; turn this on if the app opens no window.")
+            wrapMode: Text.Wrap
+            opacity: 0.7
+            font: Kirigami.Theme.smallFont
+            Layout.fillWidth: true
         }
     }
 

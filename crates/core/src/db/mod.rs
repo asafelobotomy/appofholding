@@ -95,6 +95,11 @@ const MIGRATIONS: &[&str] = &[
     // arguments could otherwise be read as options of `run`); `Library::open` does it.
     "INSERT OR IGNORE INTO app_settings (app_id, key, value)
      SELECT id, 'reintegrate', '1' FROM apps;",
+    // v9: library-wide settings (defaults for every app; see `crate::defaults`)
+    "CREATE TABLE library_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+     );",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +172,9 @@ impl Db {
     fn init(conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", true)?;
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        // With WAL this is still crash-safe (a power cut can only lose the last commits), and
+        // it saves an fsync on every one of the many small writes a check makes.
+        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
         // The GUI, the CLI and the background timer share one file; wait for each other briefly
         // instead of failing with "database is locked".
         conn.busy_timeout(std::time::Duration::from_secs(10))?;

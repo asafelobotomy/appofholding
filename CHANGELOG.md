@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- **Settings for every app.** Settings → *App defaults* picks the update policy new update
+  sources start with (with **Apply to all apps…** to change existing ones too) and the sandbox
+  new apps start in; Settings → *Updates* sets how many previous versions an update keeps (it
+  was always 2; lowering it deletes the extra ones). They live in the library, so the command
+  line (`appofholding defaults show|set`) and the background timer follow them too. `update
+  --keep` now defaults to that setting.
+- **Settings are in tabs:** General, Updates, App defaults, Tray & startup and About. The two
+  kinds of update checks (the system timer and the tray's own) are together under Updates; the
+  library folder can be opened from General; About offers the same update actions as the banner.
+- The app page is easier to follow: the Updates tab goes status → source → policy → previous
+  versions → commands (shown once there is a source), with the policy list marking the
+  library's default; the Launch tab has one Save/Revert bar, an *Advanced* group, and asks before
+  switching profiles with unsaved changes or deleting one; the Sandbox tab has three levels to
+  pick (a changed preset is shown as *Custom*), with *Desktop integration* and *Compatibility*
+  groups. The side drawer now only switches places; adding apps and checking for updates are in
+  the toolbar, which also has Settings.
+- Faster: the window keeps the library open instead of opening it for every call; an app page
+  only redoes the expensive suggestion scan when the app, its launch settings or its sandbox
+  changed, and the Launch tab only does its work while shown; an unchanged app list is not
+  rebuilt; the tray's background check sends stored ETags, so unchanged releases cost nothing
+  against GitHub's rate limit; zsync apps remember their SHA-1 instead of hashing the whole
+  AppImage on every check; updates no longer read the new file again after downloading it, and
+  delta updates verify in one read; finding running instances reads a process's environment only
+  when needed; importing no longer re-reads the library per file; the database commits with
+  `synchronous=NORMAL`.
+
 ## 0.6.0
 
 - **Find an update source for AppImages that carry no update information.** appOFholding reads

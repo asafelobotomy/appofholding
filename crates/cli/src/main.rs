@@ -2,7 +2,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use appofholding_core::assets::{self, Arch, Selection};
 use appofholding_core::check::{self, Report};
 use appofholding_core::config::{ApplyOptions as ConfigApply, Config, Note};
@@ -109,9 +109,10 @@ enum Cmd {
         /// Leave the app alone (and say so) if it is currently running.
         #[arg(long)]
         defer_if_running: bool,
-        /// How many previous versions to keep for rollback.
-        #[arg(long, default_value_t = 2)]
-        keep: usize,
+        /// How many previous versions to keep for rollback (default: the library's setting,
+        /// see `appofholding defaults`).
+        #[arg(long)]
+        keep: Option<usize>,
     },
     /// List the previous versions kept for rollback.
     Versions { id: String },
@@ -134,6 +135,9 @@ enum Cmd {
     /// Install or remove the systemd timer that checks for updates in the background.
     #[command(subcommand)]
     Schedule(ScheduleCmd),
+    /// Show or change the settings that apply to every app.
+    #[command(subcommand)]
+    Defaults(DefaultsCmd),
     /// Check for a new release of appOFholding itself, and update it where that is possible.
     #[command(subcommand, name = "self")]
     SelfUpdate(SelfCmd),
@@ -774,6 +778,32 @@ enum ScheduleCmd {
 }
 
 #[derive(Subcommand)]
+enum DefaultsCmd {
+    /// Show the current defaults.
+    Show {
+        /// Print JSON ({"policy", "keepVersions", "sandbox"}) instead.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change one or more defaults.
+    Set {
+        /// The policy new update sources start with: auto, notify, manual or pinned.
+        #[arg(long)]
+        policy: Option<String>,
+        /// Also give every app that has an update source this policy.
+        #[arg(long, requires = "policy")]
+        all: bool,
+        /// How many previous versions an update keeps (0-10). Lowering it deletes the extra
+        /// ones now.
+        #[arg(long)]
+        keep_versions: Option<usize>,
+        /// The sandbox newly added apps start in: none, standard or strict.
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SourceCmd {
     /// Show an app's update source and the result of its last check.
     Show { id: String },
@@ -1312,6 +1342,77 @@ fn describe_outcome(o: &Outcome) -> String {
         Outcome::Skipped { id, reason } => format!("{id}: skipped ({reason})"),
         Outcome::Failed { id, error } => format!("{id}: error: {error}"),
     }
+}
+
+fn defaults_cmd(cmd: DefaultsCmd) -> Result<()> {
+    let lib = library()?;
+    match cmd {
+        DefaultsCmd::Show { json } => {
+            let d = lib.defaults()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "policy": d.policy.as_str(),
+                        "keepVersions": d.keep_versions,
+                        "sandbox": d.sandbox.as_str(),
+                    })
+                );
+            } else {
+                println!("policy         {}", d.policy.as_str());
+                println!("keep-versions  {}", d.keep_versions);
+                println!("sandbox        {}", d.sandbox.as_str());
+            }
+        }
+        DefaultsCmd::Set {
+            policy,
+            all,
+            keep_versions,
+            sandbox,
+        } => {
+            if policy.is_none() && keep_versions.is_none() && sandbox.is_none() {
+                bail!("nothing to set: give --policy, --keep-versions or --sandbox");
+            }
+            // Check every value before changing anything.
+            let policy = policy
+                .map(|p| {
+                    Policy::parse(&p)
+                        .ok_or_else(|| anyhow!("policy must be auto, notify, manual or pinned"))
+                })
+                .transpose()?;
+            let sandbox = sandbox
+                .map(|l| match Level::parse(&l) {
+                    Some(l @ (Level::None | Level::Standard | Level::Strict)) => Ok(l),
+                    _ => Err(anyhow!("sandbox must be none, standard or strict")),
+                })
+                .transpose()?;
+            if let Some(n) = keep_versions
+                && n > appofholding_core::defaults::MAX_KEEP_VERSIONS
+            {
+                bail!(
+                    "at most {} previous versions can be kept",
+                    appofholding_core::defaults::MAX_KEEP_VERSIONS
+                );
+            }
+            if let Some(p) = policy {
+                lib.set_default_policy(p)?;
+                println!("New update sources start as: {}", p.as_str());
+                if all {
+                    let n = lib.set_policy_all(p)?;
+                    println!("Changed {n} app(s) to {}", p.as_str());
+                }
+            }
+            if let Some(n) = keep_versions {
+                lib.set_keep_versions(n)?;
+                println!("Updates keep {n} previous version(s)");
+            }
+            if let Some(l) = sandbox {
+                lib.set_default_sandbox(l)?;
+                println!("New apps start with sandbox: {}", l.as_str());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
@@ -1994,7 +2095,10 @@ fn main() -> Result<()> {
                 } else {
                     IfRunning::Proceed
                 },
-                keep_versions: keep,
+                keep_versions: match keep {
+                    Some(n) => n,
+                    None => lib.keep_versions()?,
+                },
                 force,
             };
             let ids: Vec<String> = match id {
@@ -2080,6 +2184,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Schedule(cmd) => schedule_cmd(cmd)?,
+        Cmd::Defaults(cmd) => defaults_cmd(cmd)?,
         Cmd::Launch(cmd) => launch_cmd(cmd)?,
         Cmd::Run {
             profile,

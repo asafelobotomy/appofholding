@@ -257,6 +257,11 @@ pub fn scan(lib: &Library, opts: &ScanOptions) -> Result<Scan> {
         .into_iter()
         .map(|a| (a.id, a.size, a.sha256))
         .collect();
+    let in_library: std::collections::HashMap<PathBuf, String> = lib
+        .list()?
+        .into_iter()
+        .map(|a| (a.appimage_path, a.id))
+        .collect();
     let mut seen = std::collections::BTreeSet::new();
     for f in files {
         let canon = fs::canonicalize(&f).unwrap_or_else(|_| f.clone());
@@ -272,9 +277,9 @@ pub fn scan(lib: &Library, opts: &ScanOptions) -> Result<Scan> {
             scan.skipped.push((canon, "not an AppImage".into()));
             continue;
         }
-        if let Some(app) = lib.list()?.into_iter().find(|a| a.appimage_path == canon) {
+        if let Some(id) = in_library.get(&canon) {
             scan.skipped
-                .push((canon, format!("already in the library as '{}'", app.id)));
+                .push((canon, format!("already in the library as '{id}'")));
             continue;
         }
         let size = fs::metadata(&canon).map(|m| m.len()).unwrap_or(0);

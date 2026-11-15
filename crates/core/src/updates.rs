@@ -58,6 +58,17 @@ impl Library {
         ids.iter().cloned().zip(results).collect()
     }
 
+    /// Like [`Library::check_many`], but each check sends the stored ETag, so a release that
+    /// has not changed costs nothing against the server's rate limit. For background checks.
+    pub fn check_many_cached(
+        &self,
+        http: &(dyn Http + Sync),
+        ids: &[String],
+    ) -> Vec<(String, Result<crate::engine::CheckState>)> {
+        let results = self.par_map(ids, |lib, id| lib.check_cached(http, id));
+        ids.iter().cloned().zip(results).collect()
+    }
+
     /// Run `work` for every id, a few at a time, each worker on its own database connection.
     /// Results are in the order of `ids`.
     pub(crate) fn par_map<R: Send>(

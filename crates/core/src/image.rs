@@ -268,6 +268,30 @@ pub fn sha1_file(path: &Path) -> Result<String> {
     Ok(hex::encode(h.finalize()))
 }
 
+/// SHA-256, SHA-1 and size of a file, in one read (for zsync results, which are checked
+/// against both).
+pub fn hash_file_both(path: &Path) -> Result<(String, String, u64)> {
+    use sha1::Sha1;
+    let mut f = File::open(path).map_err(Error::io(path))?;
+    let (mut h256, mut h1) = (Sha256::new(), Sha1::new());
+    let mut buf = vec![0u8; 1 << 20];
+    let mut total = 0u64;
+    loop {
+        let n = f.read(&mut buf).map_err(Error::io(path))?;
+        if n == 0 {
+            break;
+        }
+        h256.update(&buf[..n]);
+        h1.update(&buf[..n]);
+        total += n as u64;
+    }
+    Ok((
+        hex::encode(h256.finalize()),
+        hex::encode(h1.finalize()),
+        total,
+    ))
+}
+
 /// SHA-256 and size of a file on disk.
 pub fn hash_file(path: &Path) -> Result<(String, u64)> {
     let mut f = File::open(path).map_err(Error::io(path))?;

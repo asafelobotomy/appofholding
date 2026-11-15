@@ -75,12 +75,29 @@ ColumnLayout {
 
     function revert() { loadProfile(profileName) }
 
-    onDetailChanged: if (detail.id) {
-        presets = Util.parse(backend.presets())
+    // The work (profile, preview) is done only while the tab is showing; a refresh while it is
+    // hidden just marks it stale.
+    property bool stale: true
+    function refresh() {
+        if (!detail.id) return
+        if (!visible) { stale = true; return }
+        stale = false
+        if (presets.length === 0) presets = Util.parse(backend.presets())
         var keep = detail.profiles && detail.profiles.indexOf(profileName) >= 0
         // Keep unsaved edits when the same app's details are merely refreshed.
         if (dirty && keep && loadedFor === appId) return
         loadProfile(keep ? profileName : "default")
+    }
+    onDetailChanged: refresh()
+    onVisibleChanged: if (visible && stale) refresh()
+
+    // Switching profile with unsaved edits asks first.
+    property string pendingProfile
+    function switchTo(name) {
+        if (name === profileName) return
+        if (!dirty) { loadProfile(name); return }
+        pendingProfile = name
+        discardDialog.open()
     }
 
     // ---- which profile
@@ -97,7 +114,11 @@ ColumnLayout {
                 id: profiles
                 model: sec.detail.profiles || []
                 currentIndex: Math.max(0, (sec.detail.profiles || []).indexOf(sec.profileName))
-                onActivated: (i) => sec.loadProfile(model[i])
+                onActivated: (i) => {
+                    sec.switchTo(model[i])
+                    // Stay on the shown profile until the switch really happens.
+                    currentIndex = Qt.binding(() => Math.max(0, (sec.detail.profiles || []).indexOf(sec.profileName)))
+                }
                 Accessible.name: qsTr("Profile")
             }
             QQC2.Button {
@@ -109,14 +130,7 @@ ColumnLayout {
                 text: qsTr("Delete")
                 icon.name: "edit-delete"
                 visible: sec.profileName !== "default"
-                onClicked: {
-                    var err = sec.backend.deleteProfile(sec.appId, sec.profileName)
-                    sec.notify(err)
-                    if (err) return
-                    sec.dirty = false
-                    sec.profileName = "default"
-                    applicationWindow().reload()
-                }
+                onClicked: deleteDialog.open()
             }
         }
     }
@@ -151,8 +165,9 @@ ColumnLayout {
 
     // ---- arguments, environment
     SectionCard {
-        title: qsTr("Options")
+        title: qsTr("Command")
         iconName: "utilities-terminal"
+        subtitle: qsTr("Unsaved changes can be saved or reverted from the bar at the bottom.")
 
         Kirigami.FormLayout {
             Layout.fillWidth: true
@@ -192,36 +207,28 @@ ColumnLayout {
                 Layout.fillWidth: true
                 Layout.minimumWidth: Kirigami.Units.gridUnit * 18
             }
-            QQC2.CheckBox {
-                id: extract
-                text: qsTr("Unpack instead of mounting (no FUSE needed)")
-                onToggled: sec.dirty = true
-            }
-            QQC2.CheckBox {
-                id: elevated
-                text: qsTr("Run as administrator (root)")
-                onToggled: sec.dirty = true
-            }
+        }
+    }
+
+    // ---- rarely needed
+    SectionCard {
+        title: qsTr("Advanced")
+        iconName: "preferences-other"
+        QQC2.CheckBox {
+            id: extract
+            text: qsTr("Unpack instead of mounting (no FUSE needed)")
+            onToggled: sec.dirty = true
+        }
+        QQC2.CheckBox {
+            id: elevated
+            text: qsTr("Run as administrator (root)")
+            onToggled: sec.dirty = true
         }
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             visible: elevated.checked
             type: Kirigami.MessageType.Warning
             text: qsTr("The app gets full control of your system. It cannot be combined with a sandbox.")
-        }
-        RowLayout {
-            PrimaryButton {
-                text: qsTr("Save")
-                icon.name: "document-save"
-                enabled: sec.dirty
-                onClicked: sec.save()
-            }
-            QQC2.Button {
-                text: qsTr("Revert")
-                icon.name: "edit-undo"
-                enabled: sec.dirty
-                onClicked: sec.revert()
-            }
         }
     }
 
@@ -262,6 +269,47 @@ ColumnLayout {
             }
         }
         QQC2.TextField { id: clip; visible: false }
+    }
+
+    Kirigami.PromptDialog {
+        id: discardDialog
+        title: qsTr("Discard unsaved changes?")
+        subtitle: qsTr("The changes to the “%1” profile have not been saved.").arg(sec.profileName)
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: qsTr("Save, then switch")
+                icon.name: "document-save"
+                onTriggered: { discardDialog.close(); if (sec.save()) sec.loadProfile(sec.pendingProfile) }
+            },
+            Kirigami.Action {
+                text: qsTr("Discard")
+                icon.name: "edit-delete"
+                onTriggered: { discardDialog.close(); sec.loadProfile(sec.pendingProfile) }
+            }
+        ]
+    }
+
+    Kirigami.PromptDialog {
+        id: deleteDialog
+        title: qsTr("Delete the “%1” profile?").arg(sec.profileName)
+        subtitle: qsTr("It disappears from the app's right-click menu. This cannot be undone.")
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: qsTr("Delete")
+                icon.name: "edit-delete"
+                onTriggered: {
+                    deleteDialog.close()
+                    var err = sec.backend.deleteProfile(sec.appId, sec.profileName)
+                    sec.notify(err)
+                    if (err) return
+                    sec.dirty = false
+                    sec.profileName = "default"
+                    applicationWindow().reload()
+                }
+            }
+        ]
     }
 
     QQC2.Dialog {

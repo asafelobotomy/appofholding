@@ -301,6 +301,57 @@ pub fn set_policy(lib: &Library, id: &str, policy: &str) -> Res<()> {
     lib.set_policy(id, p).map_err(e)
 }
 
+/// The settings that apply to every app: {policy, keepVersions, maxKeepVersions, sandbox}.
+pub fn library_defaults(lib: &Library) -> Res<Value> {
+    let d = lib.defaults().map_err(e)?;
+    Ok(json!({
+        "policy": d.policy.as_str(),
+        "keepVersions": d.keep_versions,
+        "maxKeepVersions": appofholding_core::defaults::MAX_KEEP_VERSIONS,
+        "sandbox": d.sandbox.as_str(),
+    }))
+}
+
+/// Change any of `policy`, `keepVersions` and `sandbox`; keys left out stay as they are.
+/// Every value is checked before anything is saved.
+pub fn set_library_defaults(lib: &Library, v: &Value) -> Res<()> {
+    let policy = match v.get("policy").and_then(Value::as_str) {
+        Some(p) => Some(Policy::parse(p).ok_or("policy must be auto, notify, manual or pinned")?),
+        None => None,
+    };
+    let sandbox = match v.get("sandbox").and_then(Value::as_str) {
+        Some(l) => match Level::parse(l) {
+            Some(l @ (Level::None | Level::Standard | Level::Strict)) => Some(l),
+            _ => return Err("sandbox must be none, standard or strict".into()),
+        },
+        None => None,
+    };
+    let keep = match v.get("keepVersions") {
+        Some(n) => Some(
+            n.as_u64()
+                .filter(|n| *n as usize <= appofholding_core::defaults::MAX_KEEP_VERSIONS)
+                .ok_or("keepVersions must be a whole number from 0 to 10")? as usize,
+        ),
+        None => None,
+    };
+    if let Some(p) = policy {
+        lib.set_default_policy(p).map_err(e)?;
+    }
+    if let Some(l) = sandbox {
+        lib.set_default_sandbox(l).map_err(e)?;
+    }
+    if let Some(n) = keep {
+        lib.set_keep_versions(n).map_err(e)?;
+    }
+    Ok(())
+}
+
+/// Give every app with an update source `policy`: {changed}.
+pub fn apply_policy_all(lib: &Library, policy: &str) -> Res<Value> {
+    let p = Policy::parse(policy).ok_or("policy must be auto, notify, manual or pinned")?;
+    Ok(json!({ "changed": lib.set_policy_all(p).map_err(e)? }))
+}
+
 pub fn set_source(lib: &Library, id: &str, input: &str, pattern: &str, channel: &str) -> Res<()> {
     let mut parsed = source::parse_input(input).map_err(e)?;
     if !pattern.trim().is_empty() {
@@ -946,24 +997,66 @@ pub fn check_app(lib: &Library, http: &dyn appofholding_core::http::Http, id: &s
     Ok(json!({"status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem()}))
 }
 
+#[cfg(test)]
 pub fn check_all(lib: &Library, http: &(dyn appofholding_core::http::Http + Sync)) -> Res<Value> {
+    check_all_with(lib, http, false)
+}
+
+/// Check every app with a source. `cached` sends the stored ETags (background checks), so an
+/// unchanged release is not fetched again; a forced check always asks.
+fn check_all_with(
+    lib: &Library,
+    http: &(dyn appofholding_core::http::Http + Sync),
+    cached: bool,
+) -> Res<Value> {
     let ids: Vec<String> = lib
         .sources()
         .map_err(e)?
         .into_iter()
         .map(|s| s.app_id)
         .collect();
-    let checked = lib.check_many(http, &ids);
+    // (status, latest, problem) per app.
+    type Outcome = (String, Option<String>, Option<String>);
+    let checked: Vec<(String, appofholding_core::Result<Outcome>)> = if cached {
+        lib.check_many_cached(http, &ids)
+            .into_iter()
+            .map(|(id, r)| {
+                let r = r.map(|st| match st.report {
+                    Some(r) => (
+                        r.status.as_str().to_string(),
+                        Some(r.latest_version().to_string()),
+                        r.problem(),
+                    ),
+                    None => (st.status.as_str().to_string(), st.latest, None),
+                });
+                (id, r)
+            })
+            .collect()
+    } else {
+        lib.check_many(http, &ids)
+            .into_iter()
+            .map(|(id, r)| {
+                let r = r.map(|r| {
+                    (
+                        r.status.as_str().to_string(),
+                        Some(r.latest_version().to_string()),
+                        r.problem(),
+                    )
+                });
+                (id, r)
+            })
+            .collect()
+    };
     // Read after the check, so a pin or skip is as current as the answer.
     let sources = lib.sources().map_err(e)?;
     let results = checked
         .into_iter()
         .map(|(id, r)| match r {
-            Ok(r) => {
+            Ok((status, latest, problem)) => {
                 let src = sources.iter().find(|s| s.app_id == id);
-                let update = r.problem().is_none()
-                    && engine::counts_as_update(Some(r.status.as_str()), Some(r.latest_version()), src);
-                json!({"id": id, "status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem(), "update": update})
+                let update = problem.is_none()
+                    && engine::counts_as_update(Some(status.as_str()), latest.as_deref(), src);
+                json!({"id": id, "status": status, "latest": latest, "problem": problem, "update": update})
             }
             Err(err) => json!({"id": id, "error": err.to_string()}),
         })
@@ -973,11 +1066,14 @@ pub fn check_all(lib: &Library, http: &(dyn appofholding_core::http::Http + Sync
 
 /// The tray's background check: check every app, then hand out the updates the user has not
 /// been told about yet ({results, fresh: [{id, name, version}]}).
+/// `forced`: asked for by the user, so every source is asked again rather than trusting an
+/// unchanged ETag.
 pub fn notify_check(
     lib: &Library,
     http: &(dyn appofholding_core::http::Http + Sync),
+    forced: bool,
 ) -> Res<Value> {
-    let results = check_all(lib, http)?;
+    let results = check_all_with(lib, http, !forced)?;
     let fresh = lib
         .take_unannounced_updates()
         .map_err(e)?
@@ -995,6 +1091,7 @@ pub fn update_app(
 ) -> Res<Value> {
     let opts = ApplyOptions {
         if_running: IfRunning::Proceed,
+        keep_versions: lib.keep_versions().map_err(e)?,
         ..ApplyOptions::default()
     };
     let applied = lib.update(http, id, &opts, progress).map_err(e)?;
@@ -1032,6 +1129,34 @@ mod tests {
         assert!(theme_save(&dirs, "../evil").is_err());
         std::fs::write(gui_file(&dirs, "gui-theme"), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "system");
+    }
+
+    #[test]
+    fn library_defaults_are_validated_before_anything_is_saved() {
+        let (_tmp, lib) = lib();
+        assert_eq!(library_defaults(&lib).unwrap()["policy"], "notify");
+        // One bad value: nothing is saved.
+        assert!(
+            set_library_defaults(&lib, &json!({"policy": "auto", "keepVersions": 99})).is_err()
+        );
+        assert!(set_library_defaults(&lib, &json!({"sandbox": "custom"})).is_err());
+        assert_eq!(library_defaults(&lib).unwrap()["policy"], "notify");
+        set_library_defaults(
+            &lib,
+            &json!({"policy": "auto", "keepVersions": 0, "sandbox": "standard"}),
+        )
+        .unwrap();
+        let d = library_defaults(&lib).unwrap();
+        assert_eq!(
+            (
+                d["policy"].as_str(),
+                d["keepVersions"].as_u64(),
+                d["sandbox"].as_str()
+            ),
+            (Some("auto"), Some(0), Some("standard"))
+        );
+        assert_eq!(apply_policy_all(&lib, "manual").unwrap()["changed"], 0);
+        assert!(apply_policy_all(&lib, "bogus").is_err());
     }
 
     /// Serialises the tests that point `APPOFHOLDING_ROOT` somewhere (it is process-wide).
