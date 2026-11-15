@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
 
 - Settings tabs have short names (General, Updates, Defaults, Tray, About), so they fit when
   Settings shares the window with the app list; "Tray & startup" also showed as "Tray _…"
