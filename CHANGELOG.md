@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - **Settings for every app.** Settings → *App defaults* picks the update policy new update
   sources start with (with **Apply to all apps…** to change existing ones too) and the sandbox
