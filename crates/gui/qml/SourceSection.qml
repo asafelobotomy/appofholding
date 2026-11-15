@@ -11,7 +11,7 @@ ColumnLayout {
     property string appId
     property var backend
     readonly property var src: detail.source || null
-    readonly property bool hasUpdate: !!src && src.status === "update-available"
+    readonly property bool hasUpdate: !!src && src.update === true
     property var tested: null
     property string testError
 
@@ -48,7 +48,7 @@ ColumnLayout {
     Connections {
         target: sec.backend
         function onFinished(kind, id, ok, payload) {
-            if (kind !== "resolve" || id !== sec.appId) return
+            if (kind !== "resolve" || id !== "resolve:" + sec.appId) return
             sec.tested = ok ? Util.parse(payload) : null
             sec.testError = ok ? "" : payload
         }
@@ -120,7 +120,7 @@ ColumnLayout {
             QQC2.Button {
                 text: qsTr("Skip this version")
                 icon.name: "dialog-cancel"
-                visible: sec.hasUpdate && sec.src.skipped !== sec.src.latest
+                visible: sec.hasUpdate
                 onClicked: { sec.notify(sec.backend.skip(sec.appId, false)); applicationWindow().reload() }
             }
             QQC2.Button {
@@ -137,7 +137,7 @@ ColumnLayout {
         visible: !!sec.src
         title: qsTr("When a new version is found")
         iconName: "preferences-system-time"
-        subtitle: qsTr("Used by “Check now”, the background timer and the tray notifications.")
+        subtitle: qsTr("The background timer (see Settings) follows this: it installs the new version, tells you about it, or stays quiet. “Check now” and the tray only look; the tray tells you about apps set to “Tell me”.")
 
         QQC2.ComboBox {
             id: policy
@@ -205,7 +205,8 @@ ColumnLayout {
                 text: qsTr("Test")
                 icon.name: "dialog-ok-apply"
                 enabled: link.text.length > 0 && !applicationWindow().working
-                onClicked: { sec.tested = null; sec.testError = ""; sec.backend.start("resolve", sec.appId, link.text, pattern.text, sec.chosenChannel) }
+                // Its own progress key: under the app's id, a test would look like an update.
+                onClicked: { sec.tested = null; sec.testError = ""; sec.backend.start("resolve", "resolve:" + sec.appId, link.text, pattern.text, sec.chosenChannel) }
             }
             PrimaryButton {
                 text: qsTr("Save")

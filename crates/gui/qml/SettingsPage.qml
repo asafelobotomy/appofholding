@@ -137,17 +137,35 @@ ThemedPage {
         }
 
         Section {
+            id: scheduleSection
             title: qsTr("Automatic update checks")
             subtitle: qsTr("A background timer checks your apps for updates and installs the ones set to update automatically. Apps set to notify get one notification per new version.")
 
+            // Turning the timer on or off runs systemctl, so it is a task; the controls wait for
+            // its answer and then show what is really set up.
+            property bool busy: false
+            Connections {
+                target: page.backend
+                function onFinished(kind, id, ok, payload) {
+                    if (kind !== "scheduleInstall" && kind !== "scheduleRemove") return
+                    scheduleSection.busy = false
+                    if (!ok) applicationWindow().showPassiveNotification(payload, "long")
+                    page.load()
+                    // A toggle or pick replaced the bindings; follow the real state again.
+                    sw.checked = Qt.binding(() => page.scheduled)
+                    interval.currentIndex = Qt.binding(() => Math.max(0, interval.keys.indexOf(page.scheduledInterval)))
+                }
+            }
+
             RowLayout {
+                enabled: !scheduleSection.busy
                 QQC2.Switch {
                     id: sw
                     checked: page.scheduled
                     onToggled: {
-                        var err = checked ? page.backend.scheduleInstall(interval.keys[interval.currentIndex]) : page.backend.scheduleRemove()
-                        if (err) applicationWindow().showPassiveNotification(err)
-                        page.load()
+                        scheduleSection.busy = true
+                        if (checked) page.backend.start("scheduleInstall", "", interval.keys[interval.currentIndex], "", "")
+                        else page.backend.start("scheduleRemove", "", "", "", "")
                     }
                 }
                 QQC2.Label { text: page.scheduled ? qsTr("On") : qsTr("Off") }
@@ -157,10 +175,15 @@ ThemedPage {
                     model: [qsTr("Every hour"), qsTr("Every day"), qsTr("Every week")]
                     currentIndex: Math.max(0, keys.indexOf(page.scheduledInterval))
                     onActivated: if (page.scheduled) {
-                        var err = page.backend.scheduleInstall(keys[currentIndex])
-                        if (err) applicationWindow().showPassiveNotification(err)
-                        page.load()
+                        scheduleSection.busy = true
+                        page.backend.start("scheduleInstall", "", keys[currentIndex], "", "")
                     }
+                }
+                QQC2.BusyIndicator {
+                    visible: scheduleSection.busy
+                    running: visible
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
                 }
             }
         }

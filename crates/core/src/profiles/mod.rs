@@ -186,12 +186,15 @@ impl Library {
         };
         let appdir = extract::path_for(&self.dirs, &app.sha256);
         let private_home = self.dirs.private_home(id);
-        let proxy_socket = host.runtime_dir.join(format!("appofholding-{id}-bus"));
+        // One socket per launch: two instances of the same app must not share (and delete)
+        // each other's. See `launch::remove_stale_proxy_sockets` for the cleanup.
+        let proxy_socket = host
+            .runtime_dir
+            .join(launch::proxy_socket_name(id, std::process::id()));
         let sb = sandbox::build(
             &settings,
             host,
             &sandbox::Launch {
-                id,
                 appdir: &appdir,
                 appimage: &app.appimage_path,
                 private_home: &private_home,
@@ -288,17 +291,45 @@ pub(crate) fn exec_hook(app: &AppRecord, kind: &str, command: &str) -> Result<()
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| Error::Other(format!("{kind} hook could not start: {e}")))?;
+    // Read stderr while the hook runs: a hook that writes more than the pipe holds would
+    // otherwise block until the timeout.
+    let stderr = child.stderr.take().map(|mut s| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let _ = s.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let last_line = |h: Option<std::thread::JoinHandle<Vec<u8>>>| -> String {
+        let err = h.and_then(|h| h.join().ok()).unwrap_or_default();
+        String::from_utf8_lossy(&err)
+            .trim()
+            .lines()
+            .last()
+            .unwrap_or("")
+            .to_string()
+    };
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
-                let mut err = String::new();
-                if let Some(mut s) = child.stderr.take() {
-                    use std::io::Read;
-                    let _ = s.read_to_string(&mut err);
-                }
-                let tail: String = err.trim().lines().last().unwrap_or("").to_string();
+                // The hook may have left a child holding stderr open; do not wait for it.
+                let tail = match &stderr {
+                    Some(h) if !h.is_finished() => {
+                        let deadline = Instant::now() + Duration::from_secs(1);
+                        while !h.is_finished() && Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        if h.is_finished() {
+                            last_line(stderr)
+                        } else {
+                            String::new()
+                        }
+                    }
+                    _ => last_line(stderr),
+                };
                 return Err(Error::Other(format!(
                     "{kind} hook failed ({status}){}",
                     if tail.is_empty() {

@@ -11,7 +11,7 @@ Rectangle {
     readonly property var app: modelData
     readonly property real downloading: applicationWindow().progress[app.id] !== undefined ? applicationWindow().progress[app.id] : -2
     readonly property bool busy: downloading > -2
-    readonly property bool hasUpdate: app.status === "update-available"
+    readonly property bool hasUpdate: app.update === true
     readonly property bool hasProblem: !!app.error
     // In a narrow list the buttons shrink to icons so the text keeps its room.
     readonly property bool compact: width < Kirigami.Units.gridUnit * 30
@@ -98,7 +98,7 @@ Rectangle {
                 spacing: Kirigami.Units.smallSpacing
                 visible: !card.busy
                 Rectangle {
-                    width: 8; height: 8; radius: 4
+                    Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4
                     color: card.hasUpdate ? Kirigami.Theme.positiveTextColor
                         : card.hasProblem ? Kirigami.Theme.neutralTextColor
                         : card.app.status === "up-to-date" ? Kirigami.ColorUtils.tintWithAlpha(Kirigami.Theme.backgroundColor, Kirigami.Theme.positiveTextColor, 0.7)

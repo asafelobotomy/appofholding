@@ -108,21 +108,25 @@ pub fn integrate_entry(
     app_id: Option<&str>,
     drop: &[&str],
 ) -> String {
+    // `entry` was parsed, so it has no duplicate groups or keys: every `Exec` is rewritten below.
     let mut e = entry.clone();
     let wrap = |original: Option<&str>| -> String {
         let rest = original.map(desktop::split_exec).unwrap_or_default();
-        let mut args = vec![
+        // `--` ends our own options: whatever the AppImage's entry passes (even `--unsandboxed`
+        // or `--profile`) reaches the app, never `run` itself.
+        let mut exec = desktop::join_exec(&[
             exec_bin.to_string_lossy().into_owned(),
             "run".into(),
             id.to_string(),
-        ];
+            "--".into(),
+        ]);
         // The first token is the AppImage's own binary (AppRun etc.); our launcher replaces it.
-        args.extend(
-            rest.into_iter()
-                .skip(1)
-                .filter(|a| !drop.contains(&a.as_str())),
-        );
-        desktop::join_exec(&args)
+        // The rest are re-quoted as tokens, so field codes and `%%` keep their meaning.
+        for a in rest.iter().skip(1).filter(|a| !drop.contains(&a.as_str())) {
+            exec.push(' ');
+            exec.push_str(&desktop::quote_exec_token(a));
+        }
+        exec
     };
     let main_exec = wrap(entry.main("Exec"));
     e.set(MAIN, "Exec", &main_exec);

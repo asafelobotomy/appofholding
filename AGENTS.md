@@ -16,10 +16,10 @@ Rust workspace that keeps AppImages tidy, updated and (optionally) sandboxed wit
 - `crates/core`: library (no Qt). `crates/cli`: `appofholding` binary, tests in `crates/cli/tests`.
 - `crates/gui`: Qt/Kirigami GUI; QML in `crates/gui/qml`, `build.rs` does the Qt build.
 - `docs/`: configuration, importing, sandbox, embedding-update-info. `packaging/`: arch (PKGBUILD), rpm spec, deb, appimage, desktop file, metainfo.
-- `uq/`: uQ desktop integration (widget, Settings page, app actions; see `uq/README.md`), installed under `/usr/share/uq/` by `make install`. Check with `uqctl integrations check uq/`; QML tests in `tests/uq/` (`QT_QPA_PLATFORM=offscreen qmltestrunner -input tests/uq/tst_widget.qml`, and `-import tests/uq/imports -input tests/uq/tst_page.qml`).
+- `uq/`: uQ desktop integration (widget, Settings page, app actions; see `uq/README.md`), installed under `/usr/share/uq/` by `make install`. Check with `uqctl integrations check uq/`; QML tests in `tests/uq/` (`QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/uq/tst_widget.qml`, and `-import tests/uq/imports -input tests/uq/tst_page.qml`).
 
 ## Conventions
-- Rust edition 2024, MSRV 1.89, GPL-3.0-or-later. Work on `main`; CI runs on push to main and PRs.
+- Rust edition 2024, MSRV 1.90, GPL-3.0-or-later. Work on `main`; CI runs on push to main and PRs.
 - CI uses `--locked`, so commit `Cargo.lock` changes.
 - Releases: push a tag `vX.Y.Z`; the Release workflow builds the Arch package in an archlinux container and publishes it. It fails unless the tag equals the version in all of: `Cargo.toml` (workspace version), `packaging/arch/PKGBUILD` (`pkgver=`), `packaging/rpm/appofholding.spec` (`Version:`), `packaging/io.github.appofholding.metainfo.xml` (a `release version=`), and a `## X.Y.Z` section in `CHANGELOG.md` (used as release notes). Bump all of them together.
 

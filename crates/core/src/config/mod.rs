@@ -122,6 +122,15 @@ impl Config {
             if a.id.trim().is_empty() {
                 return Err(Error::Other("an [[app]] entry has no id".into()));
             }
+            // Ids are slugs (what `add` derives from a name); anything else would be installed
+            // under a different id than the one every later step looks up.
+            let slug = crate::paths::slugify(&a.id);
+            if a.id != slug {
+                return Err(Error::Other(format!(
+                    "app id '{}' is not valid: ids use lowercase letters, digits and '-' (write `id = \"{slug}\"`)",
+                    a.id
+                )));
+            }
             if !seen.insert(&a.id) {
                 return Err(Error::Other(format!("app '{}' is listed twice", a.id)));
             }
@@ -306,13 +315,16 @@ pub struct ApplyOptions {
     pub no_install: bool,
     /// Also delete extra profiles and hooks that the file does not list.
     pub prune: bool,
-    /// Accept entries that make appOFholding run commands: hooks, command prefixes and
-    /// profiles that start the app as root. Off by default, so a file from someone else cannot
-    /// slip them in.
+    /// Accept entries that make appOFholding run commands or weaken an app's sandbox: hooks,
+    /// command prefixes, profiles that start the app as root, profile arguments and environment
+    /// variables, and sandbox settings that turn it off, share the whole session bus or the
+    /// writable home folder, or share extra folders. Off by default, so a file from someone
+    /// else cannot slip them in.
     pub allow_commands: bool,
 }
 
-/// What in this entry would run commands on this machine, in words (empty when nothing does).
+/// What in this entry would run commands on this machine or loosen the app's sandbox, in words
+/// (empty when nothing does). Applying such an entry needs `--allow-commands`.
 pub fn commands_in(a: &AppConfig) -> Vec<String> {
     let mut out: Vec<String> = a
         .hooks
@@ -329,6 +341,38 @@ pub fn commands_in(a: &AppConfig) -> Vec<String> {
         }
         if p.elevated {
             out.push(format!("profile '{}' starts the app as root", p.name));
+        }
+        // Arguments and variables reach the app (`--no-sandbox`, `LD_PRELOAD=...`), which can
+        // make it run other code or drop its own protections.
+        if !p.args.is_empty() {
+            out.push(format!(
+                "profile '{}' passes arguments: {}",
+                p.name,
+                p.args.join(" ")
+            ));
+        }
+        if !p.env.is_empty() {
+            let vars: Vec<String> = p.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            out.push(format!(
+                "profile '{}' sets environment: {}",
+                p.name,
+                vars.join(" ")
+            ));
+        }
+    }
+    if let Some(sb) = &a.sandbox {
+        if Level::parse(&sb.level) == Some(Level::None) {
+            out.push("sandbox turned off".into());
+        } else {
+            if sb.bus.as_deref().and_then(Bus::parse) == Some(Bus::Full) {
+                out.push("sandbox gets the whole session bus".into());
+            }
+            if sb.home.as_deref().and_then(HomeAccess::parse) == Some(HomeAccess::ReadWrite) {
+                out.push("sandbox can write your home folder".into());
+            }
+            for f in &sb.allow {
+                out.push(format!("sandbox shares {f}"));
+            }
         }
     }
     out

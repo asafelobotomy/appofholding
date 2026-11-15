@@ -22,13 +22,15 @@ Everything runs through declared commands, never a shell. The JSON they read:
   It reads the database only (the last check's result), never the network. `updates` counts the
   apps with an update that is neither skipped nor pinned.
 - `appofholding check --json`: asks every source now, saves the results, and prints
-  `{version: 1, updates, apps: [{id, status, latest, problem, error}]}`. A source that fails is a
-  row with `error`; the command still exits 0.
+  `{version: 1, updates, apps: [{id, status, latest, problem, error, update}]}`. `updates` and
+  `update` count the same way as in `list --json` (not skipped, not pinned, and not ambiguous). A
+  source that fails is a row with `error`; with `--json` the command still exits 0.
 - `appofholding schedule status --json`: `{version: 1, installed, interval}`.
 
 ## Testing
 
-- `uqctl integrations check uq/` (from uQ 0.4): clean apart from the programs it can't find
+- `uqctl integrations check uq/` (in the uQ 0.3.0 release candidates, not yet in a stable
+  release): clean apart from the programs it can't find
   where appOFholding and uQ aren't installed.
 - `tests/uq/tst_widget.qml` and `tests/uq/tst_page.qml` load the widget and the page with a fake
   `ctx` and check what they show and which commands they run (CI runs them):

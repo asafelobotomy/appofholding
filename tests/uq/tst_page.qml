@@ -1,6 +1,6 @@
 // Loads the uQ Settings page (uq/pages/appimages) with a fake ctx, as uQ Settings would, and
 // checks what it shows and the commands it runs. Run with:
-//   QT_QPA_PLATFORM=offscreen qmltestrunner -import tests/uq/imports -input tests/uq/tst_page.qml
+//   QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -import tests/uq/imports -input tests/uq/tst_page.qml
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtTest

@@ -54,6 +54,10 @@ pub struct Inspection {
     pub icon: Option<Icon>,
 }
 
+/// Per-app setting: the generated menu entry is outdated and is rewritten on the next
+/// [`Library::open`].
+pub(crate) const REINTEGRATE: &str = "reintegrate";
+
 pub struct Library {
     pub dirs: Dirs,
     /// Absolute path to the `appofholding` binary written into `Exec=` lines.
@@ -78,12 +82,29 @@ fn hicolor_size(px: u32) -> u32 {
 impl Library {
     pub fn open(dirs: Dirs, exec_bin: PathBuf) -> Result<Self> {
         let db = Db::open(&dirs.db_path())?;
-        Ok(Self {
+        let lib = Self {
             dirs,
             exec_bin,
             db,
             warnings: Default::default(),
-        })
+        };
+        lib.reintegrate_pending();
+        Ok(lib)
+    }
+
+    /// Rewrite the menu entries of apps flagged with [`REINTEGRATE`] (a database migration sets
+    /// it on every app when the format of the generated entries changes, e.g. when a fix makes
+    /// them safer). Best effort: an app whose AppImage cannot be read keeps the flag and is
+    /// tried again next time.
+    fn reintegrate_pending(&self) {
+        let Ok(ids) = self.db.apps_with_setting(REINTEGRATE) else {
+            return;
+        };
+        for id in ids {
+            if self.refresh_integration(&id).is_ok() {
+                let _ = self.db.set_setting(&id, REINTEGRATE, None);
+            }
+        }
     }
 
     pub fn list(&self) -> Result<Vec<AppRecord>> {
@@ -297,7 +318,8 @@ impl Library {
         }
     }
 
-    /// Remove the app: desktop entry, icon, database row, and (unless `keep_file`) the AppImage.
+    /// Remove the app: desktop entry, icon, kept previous versions, database row, and (unless
+    /// `keep_file`) the AppImage.
     pub fn remove(&self, id: &str, keep_file: bool) -> Result<AppRecord> {
         self.remove_with(
             id,
@@ -329,6 +351,13 @@ impl Library {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(Error::io(&t)(e)),
             }
+        }
+        // Kept previous versions (for rollback) belong to the app too.
+        let versions = self.dirs.versions_dir(id);
+        match fs::remove_dir_all(&versions) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::io(&versions)(e)),
         }
         self.db.delete(id)?;
         let _ = self.gc_extracted(); // its unpacked copies are no longer needed

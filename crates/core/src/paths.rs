@@ -108,7 +108,6 @@ impl Dirs {
     }
 }
 
-/// Name (without extension) used for the generated `.desktop` file and icon.
 /// The path to write into menu entries and the timer unit for a program at `exe`. When
 /// appOFholding itself runs as an AppImage, `exe` is inside its temporary mount, which vanishes
 /// when it exits; the AppImage file itself (`$APPIMAGE`) is the stable path, and it hands `run`
@@ -132,6 +131,7 @@ fn stable_exec_path_with(
     }
 }
 
+/// Name (without extension) used for the generated `.desktop` file and icon.
 pub fn desktop_id(id: &str) -> String {
     format!("appofholding-{id}")
 }

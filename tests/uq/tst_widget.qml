@@ -1,6 +1,6 @@
 // Loads the uQ quick-settings widget (uq/widgets/appofholding) with a fake ctx, as uQ's shell
 // would, and checks the tile text and the commands it runs. Run with:
-//   QT_QPA_PLATFORM=offscreen qmltestrunner -input tests/uq/tst_widget.qml
+//   QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/uq/tst_widget.qml
 import QtQuick
 import QtTest
 

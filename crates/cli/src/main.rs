@@ -7,7 +7,7 @@ use appofholding_core::assets::{self, Arch, Selection};
 use appofholding_core::check::{self, Report};
 use appofholding_core::config::{ApplyOptions as ConfigApply, Config, Note};
 use appofholding_core::desktop;
-use appofholding_core::engine::{Applied, ApplyOptions, IfRunning, Outcome};
+use appofholding_core::engine::{self, Applied, ApplyOptions, IfRunning, Outcome};
 use appofholding_core::http::UreqHttp;
 use appofholding_core::import;
 use appofholding_core::launch;
@@ -42,9 +42,11 @@ enum Cmd {
     Add {
         target: String,
         /// Pick the release file with this pattern (`*` and `?` wildcards), e.g. 'Foo-*-x86_64.AppImage'.
+        /// Only when adding from a link.
         #[arg(long)]
         asset: Option<String>,
-        /// Which release to follow: latest, latest-pre, latest-all or a tag name.
+        /// Which release to follow: latest, latest-pre, latest-all or a tag name. Only when
+        /// adding from a link.
         #[arg(long)]
         channel: Option<String>,
         /// Move the file into the library instead of copying it.
@@ -1195,7 +1197,13 @@ fn launch_cmd(cmd: LaunchCmd) -> Result<()> {
             let mut p = if reset {
                 launch::Profile::default()
             } else {
-                lib.profile(&id, &name).unwrap_or_default()
+                // A profile that does not exist yet is created; any other failure (no such
+                // app, an unreadable database) must not be saved over with an empty profile.
+                lib.profiles(&id)?
+                    .into_iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, p)| p)
+                    .unwrap_or_default()
             };
             if let Some(a) = args {
                 p.args = desktop::split_exec(&a);
@@ -1455,7 +1463,13 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
                 version: version.as_deref(),
                 sha256: digest.as_deref(),
             };
-            let r = check::check(&UreqHttp::new(), &source, &installed, Arch::host())?;
+            // For an app in the library, the same answer `check` would give (zsync SHA-1, an
+            // identical file counting as up to date); for a bare link, a plain check.
+            let r = if lib.get(&input).is_ok() {
+                lib.test_source(&UreqHttp::new(), &input, &source)?
+            } else {
+                check::check(&UreqHttp::new(), &source, &installed, Arch::host())?
+            };
             print_report(&source, &r);
             if r.asset().is_none()
                 && source.asset_pattern.is_none()
@@ -1477,20 +1491,6 @@ fn source_cmd(cmd: SourceCmd) -> Result<()> {
 // For scripts and desktop integrations (uq/ in this repository). Field names are snake_case and
 // stable; `version` changes only if a field changes meaning.
 
-/// Whether a status counts as an update the user can act on: available, not the version they
-/// chose to skip, and not pinned.
-fn counts_as_update(
-    status: Option<&str>,
-    latest: Option<&str>,
-    src: Option<&SourceRecord>,
-) -> bool {
-    status == Some(Status::UpdateAvailable.as_str())
-        && src.is_none_or(|s| {
-            s.policy != Policy::Pinned
-                && (latest.is_none() || s.skipped_version.as_deref() != latest)
-        })
-}
-
 fn list_json(apps: &[AppRecord], sources: &[SourceRecord]) -> serde_json::Value {
     let by_id: std::collections::HashMap<&str, &SourceRecord> =
         sources.iter().map(|s| (s.app_id.as_str(), s)).collect();
@@ -1501,7 +1501,7 @@ fn list_json(apps: &[AppRecord], sources: &[SourceRecord]) -> serde_json::Value 
             let src = by_id.get(a.id.as_str()).copied();
             let status = src.and_then(|s| s.last_status.as_deref());
             let latest = src.and_then(|s| s.last_latest.as_deref());
-            let update = counts_as_update(status, latest, src);
+            let update = engine::counts_as_update(status, latest, src);
             updates += usize::from(update);
             json!({
                 "id": a.id,
@@ -1527,6 +1527,7 @@ fn list_json(apps: &[AppRecord], sources: &[SourceRecord]) -> serde_json::Value 
 fn check_row(
     id: &str,
     result: &std::result::Result<Report, appofholding_core::Error>,
+    src: Option<&SourceRecord>,
 ) -> serde_json::Value {
     match result {
         Ok(r) => json!({
@@ -1535,6 +1536,7 @@ fn check_row(
             "latest": r.latest_version(),
             "problem": r.problem(),
             "error": null,
+            "update": report_is_update(r, src),
         }),
         Err(e) => json!({
             "id": id,
@@ -1542,8 +1544,16 @@ fn check_row(
             "latest": null,
             "problem": null,
             "error": e.to_string(),
+            "update": false,
         }),
     }
+}
+
+/// A fresh check's answer counted the way `list --json` counts stored ones: an update the user
+/// can act on, so not ambiguous, not pinned and not the skipped version.
+fn report_is_update(r: &Report, src: Option<&SourceRecord>) -> bool {
+    r.problem().is_none()
+        && engine::counts_as_update(Some(r.status.as_str()), Some(r.latest_version()), src)
 }
 
 fn check_json(
@@ -1551,23 +1561,34 @@ fn check_json(
         String,
         std::result::Result<Report, appofholding_core::Error>,
     )],
+    sources: &[SourceRecord],
 ) -> serde_json::Value {
-    let rows: Vec<serde_json::Value> = results.iter().map(|(i, r)| check_row(i, r)).collect();
-    let updates = results
+    let by_id: std::collections::HashMap<&str, &SourceRecord> =
+        sources.iter().map(|s| (s.app_id.as_str(), s)).collect();
+    let rows: Vec<serde_json::Value> = results
         .iter()
-        .filter(|(_, r)| {
-            r.as_ref()
-                .is_ok_and(|r| r.problem().is_none() && r.status == Status::UpdateAvailable)
-        })
-        .count();
+        .map(|(i, r)| check_row(i, r, by_id.get(i.as_str()).copied()))
+        .collect();
+    let updates = rows.iter().filter(|r| r["update"] == true).count();
     json!({ "version": 1, "apps": rows, "updates": updates })
 }
 
 /// One line for a notification about one app's check.
-fn check_summary(result: &std::result::Result<Report, appofholding_core::Error>) -> String {
+fn check_summary(
+    result: &std::result::Result<Report, appofholding_core::Error>,
+    src: Option<&SourceRecord>,
+) -> String {
     match result {
         Ok(r) => match (r.problem(), r.status) {
             (Some(p), _) => format!("Could not choose the update: {p}"),
+            (None, Status::UpdateAvailable) if !report_is_update(r, src) => {
+                let why = if src.is_some_and(|s| s.policy == Policy::Pinned) {
+                    "the app is pinned to the installed version"
+                } else {
+                    "you chose to skip it"
+                };
+                format!("Version {} is available, but {why}.", r.latest_version())
+            }
             (None, Status::UpdateAvailable) => {
                 format!("Version {} is available.", r.latest_version())
             }
@@ -1632,6 +1653,12 @@ fn main() -> Result<()> {
             let lib = library()?;
             let path = PathBuf::from(&target);
             let rec = if path.is_file() {
+                if asset.is_some() || channel.is_some() {
+                    bail!(
+                        "--asset and --channel only apply when adding from a link; \
+                         for a local file, set them later with `appofholding source set`"
+                    );
+                }
                 lib.add(&path, &opts)?
             } else {
                 let parsed = build_source(&target, asset, channel)?;
@@ -1895,14 +1922,17 @@ fn main() -> Result<()> {
                 None => lib.sources()?.into_iter().map(|s| s.app_id).collect(),
             };
             let results = lib.check_many(&http, &ids);
+            // Read after the check, so a pin or skip is as current as the answer.
+            let sources = lib.sources()?;
             if notify {
                 for (i, result) in &results {
                     let name = lib.get(i).map(|a| a.name).unwrap_or_else(|_| i.clone());
-                    NotifySend.notify(&name, &check_summary(result));
+                    let src = sources.iter().find(|s| &s.app_id == i);
+                    NotifySend.notify(&name, &check_summary(result, src));
                 }
             }
             if json {
-                println!("{}", check_json(&results));
+                println!("{}", check_json(&results, &sources));
                 return Ok(());
             }
             if ids.is_empty() {
@@ -1910,6 +1940,7 @@ fn main() -> Result<()> {
                     "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
             }
+            let mut failed = 0;
             for (i, result) in results {
                 match result {
                     Ok(r) => match r.problem() {
@@ -1920,8 +1951,14 @@ fn main() -> Result<()> {
                             r.latest_version()
                         ),
                     },
-                    Err(e) => println!("{i:<24} error: {e}"),
+                    Err(e) => {
+                        failed += 1;
+                        println!("{i:<24} error: {e}");
+                    }
                 }
+            }
+            if failed > 0 {
+                bail!("{failed} check(s) failed");
             }
         }
         Cmd::Update {
@@ -2234,7 +2271,7 @@ mod json_tests {
                 Err(appofholding_core::Error::Other("offline".into())),
             ),
         ];
-        let v = check_json(&results);
+        let v = check_json(&results, &[]);
         assert_eq!(v["version"], 1);
         assert_eq!(v["updates"], 1, "an ambiguous release is not an update yet");
         let rows = v["apps"].as_array().unwrap();
@@ -2250,10 +2287,53 @@ mod json_tests {
         assert_eq!(rows[3]["error"], "offline");
         assert!(rows[3]["status"].is_null());
 
-        assert_eq!(check_summary(&results[0].1), "Version v2 is available.");
-        assert_eq!(check_summary(&results[1].1), "Up to date (latest: v1).");
-        assert!(check_summary(&results[2].1).starts_with("Could not choose the update"));
-        assert!(check_summary(&results[3].1).contains("offline"));
+        assert_eq!(
+            check_summary(&results[0].1, None),
+            "Version v2 is available."
+        );
+        assert_eq!(
+            check_summary(&results[1].1, None),
+            "Up to date (latest: v1)."
+        );
+        assert!(check_summary(&results[2].1, None).starts_with("Could not choose the update"));
+        assert!(check_summary(&results[3].1, None).contains("offline"));
+    }
+
+    #[test]
+    fn check_json_does_not_count_pinned_or_skipped_updates() {
+        let results = vec![
+            (
+                "p".to_string(),
+                Ok(report("v2", Status::UpdateAvailable, 1)),
+            ),
+            (
+                "s".to_string(),
+                Ok(report("v2", Status::UpdateAvailable, 1)),
+            ),
+            (
+                "n".to_string(),
+                Ok(report("v2", Status::UpdateAvailable, 1)),
+            ),
+        ];
+        let mut skipped = src("s", "update-available", "v2", Policy::Notify);
+        skipped.skipped_version = Some("v2".into());
+        let sources = vec![
+            src("p", "update-available", "v2", Policy::Pinned),
+            skipped,
+            src("n", "update-available", "v2", Policy::Notify),
+        ];
+        let v = check_json(&results, &sources);
+        assert_eq!(v["updates"], 1);
+        let rows = v["apps"].as_array().unwrap();
+        assert_eq!(rows[0]["update"], false);
+        assert_eq!(rows[1]["update"], false);
+        assert_eq!(rows[2]["update"], true);
+        assert!(check_summary(&results[0].1, Some(&sources[0])).contains("pinned"));
+        assert!(check_summary(&results[1].1, Some(&sources[1])).contains("skip"));
+        assert_eq!(
+            check_summary(&results[2].1, Some(&sources[2])),
+            "Version v2 is available."
+        );
     }
 
     #[test]

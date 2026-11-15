@@ -230,3 +230,42 @@ fn reopening_does_not_remigrate() {
     let db = Db::open(&p).unwrap();
     assert_eq!(db.list().unwrap().len(), 1);
 }
+
+#[test]
+fn corrupt_profile_json_is_an_error_not_an_empty_profile() {
+    let db = Db::open_in_memory().unwrap();
+    db.insert(&rec("a", "/x/a")).unwrap();
+    db.put_profile("a", "default", &Profile::default()).unwrap();
+    db.conn
+        .execute(
+            "UPDATE launch_profiles SET prefix = 'not json' WHERE app_id = 'a'",
+            [],
+        )
+        .unwrap();
+    let err = db.list_profiles("a").unwrap_err().to_string();
+    assert!(err.contains("prefix"), "{err}");
+}
+
+#[test]
+fn upgrading_flags_existing_apps_for_new_menu_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("db.sqlite");
+    {
+        // A database from before v8, with one app.
+        let conn = Connection::open(&p).unwrap();
+        for sql in &MIGRATIONS[..7] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        drop(conn);
+        let db = Db {
+            conn: Connection::open(&p).unwrap(),
+        };
+        db.insert(&rec("a", "/x/a")).unwrap();
+    }
+    let db = Db::open(&p).unwrap();
+    assert_eq!(db.apps_with_setting("reintegrate").unwrap(), ["a"]);
+    // Apps added later are written in the current format and are not flagged.
+    db.insert(&rec("b", "/x/b")).unwrap();
+    assert_eq!(db.apps_with_setting("reintegrate").unwrap(), ["a"]);
+}

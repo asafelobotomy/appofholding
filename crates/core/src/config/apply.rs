@@ -98,10 +98,17 @@ impl Library {
         for kind in a.hooks.keys() {
             crate::profiles::check_kind(kind)?;
         }
-        let commands = commands_in(a);
+        let mut commands = commands_in(a);
+        // Pruning an entry without a [sandbox] section turns the app's sandbox off.
+        if opts.prune
+            && a.sandbox.is_none()
+            && self.sandbox_settings(&a.id).is_ok_and(|s| s.enabled())
+        {
+            commands.push("sandbox turned off (the entry has no [sandbox] section)".into());
+        }
         if !commands.is_empty() && !opts.allow_commands {
             return Err(Error::Other(format!(
-                "not applied: the file asks to run commands ({}). Read them, then re-run with --allow-commands if you trust them",
+                "not applied: the file asks to run commands or loosen the sandbox ({}). Read them, then re-run with --allow-commands if you trust them",
                 commands.join("; ")
             )));
         }

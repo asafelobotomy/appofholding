@@ -138,7 +138,12 @@ pub fn decide(
     {
         return Status::UpToDate;
     }
-    let Some(cur) = installed.version.filter(|v| !v.is_empty()) else {
+    // A source that gave no identifier at all (a plain link whose server sends no ETag,
+    // Last-Modified or length) says nothing about whether anything changed.
+    if latest_version.trim().is_empty() {
+        return Status::Unknown;
+    }
+    let Some(cur) = installed.version.filter(|v| !v.trim().is_empty()) else {
         // Nothing to compare by version; a differing digest is still conclusive.
         return match (installed.sha256, latest_sha256) {
             (Some(_), Some(_)) => Status::UpdateAvailable,
@@ -273,6 +278,22 @@ mod tests {
         );
         assert_eq!(
             decide(&inst(None, None), "sha1:aa", None, true),
+            Status::Unknown
+        );
+    }
+
+    #[test]
+    fn an_empty_identifier_is_never_an_update() {
+        assert_eq!(
+            decide(&inst(Some("1.0"), None), "", None, true),
+            Status::Unknown
+        );
+        assert_eq!(
+            decide(&inst(Some("1.0"), None), "  ", None, false),
+            Status::Unknown
+        );
+        assert_eq!(
+            decide(&inst(Some(""), None), "", None, true),
             Status::Unknown
         );
     }

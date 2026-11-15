@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// Bus names a tray icon (StatusNotifierItem) is registered under. Qt and Chromium/Electron own
+/// `org.kde.StatusNotifierItem-<pid>-<n>` and hand that name to the watcher; Qt gives up on the
+/// icon when it cannot own it. The proxy only takes whole names or `.*` wildcards, so list the
+/// pids an app gets in its own pid namespace (bwrap is 1, the app starts at 2) and its first
+/// few icons. On the host these pids are kernel threads, so the names can never clash with (or
+/// impersonate) a real host app's icon.
+pub(super) fn tray_item_names() -> impl Iterator<Item = String> {
+    (2..=6).flat_map(|pid| (1..=3).map(move |n| format!("org.kde.StatusNotifierItem-{pid}-{n}")))
+}
+
 /// Build the `bwrap` command line for `launch` under `settings`.
 pub fn build(settings: &Settings, host: &Host, launch: &Launch<'_>) -> Result<Sandboxed> {
     settings.validate()?;
@@ -299,6 +309,8 @@ pub fn build(settings: &Settings, host: &Host, launch: &Launch<'_>) -> Result<Sa
             // GTK and Qt apps register a bus name derived from their application id at start-up
             // and abort if they are not allowed to; allow exactly the names this app declares.
             if let Some(h) = helper.as_mut() {
+                h.argv
+                    .extend(tray_item_names().map(|n| format!("--own={n}")));
                 for n in dbus_names(launch.appdir) {
                     h.argv.push(format!("--own={n}"));
                     h.argv.push(format!("--own={n}.*"));

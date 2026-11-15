@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use appofholding_core::assets::Selection;
-use appofholding_core::engine::{Applied, ApplyOptions, IfRunning};
+use appofholding_core::engine::{self, Applied, ApplyOptions, IfRunning};
 use appofholding_core::http::UreqHttp;
 use appofholding_core::launch::{self, DEFAULT_PROFILE, Profile};
 use appofholding_core::profiles::LaunchCtx;
@@ -100,6 +100,11 @@ pub fn list_apps(lib: &Library) -> Res<Value> {
             "latest": src.and_then(|s| s.last_latest.clone()),
             "error": src.and_then(|s| s.last_error.clone()),
             "policy": src.map(|s| s.policy.as_str()).unwrap_or(""),
+            "update": engine::counts_as_update(
+                src.and_then(|s| s.last_status.as_deref()),
+                src.and_then(|s| s.last_latest.as_deref()),
+                src,
+            ),
         }));
     }
     Ok(Value::Array(out))
@@ -154,6 +159,7 @@ pub fn app_detail(lib: &Library, id: &str) -> Res<Value> {
             "error": s.last_error,
             "policy": s.policy.as_str(),
             "skipped": s.skipped_version,
+            "update": engine::counts_as_update(s.last_status.as_deref(), s.last_latest.as_deref(), Some(s)),
         })),
         "versions": lib.versions(id).map_err(e)?.iter().map(|v| json!({
             "version": v.version,
@@ -947,12 +953,17 @@ pub fn check_all(lib: &Library, http: &(dyn appofholding_core::http::Http + Sync
         .into_iter()
         .map(|s| s.app_id)
         .collect();
-    let results = lib
-        .check_many(http, &ids)
+    let checked = lib.check_many(http, &ids);
+    // Read after the check, so a pin or skip is as current as the answer.
+    let sources = lib.sources().map_err(e)?;
+    let results = checked
         .into_iter()
         .map(|(id, r)| match r {
             Ok(r) => {
-                json!({"id": id, "status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem()})
+                let src = sources.iter().find(|s| s.app_id == id);
+                let update = r.problem().is_none()
+                    && engine::counts_as_update(Some(r.status.as_str()), Some(r.latest_version()), src);
+                json!({"id": id, "status": r.status.as_str(), "latest": r.latest_version(), "problem": r.problem(), "update": update})
             }
             Err(err) => json!({"id": id, "error": err.to_string()}),
         })
@@ -1452,7 +1463,19 @@ mod tests {
         );
         let all = check_all(&lib, &http2).unwrap();
         assert_eq!(all[0]["status"], "update-available");
+        assert_eq!(all[0]["update"], true);
         assert_eq!(list_apps(&lib).unwrap()[0]["status"], "update-available");
+        assert_eq!(list_apps(&lib).unwrap()[0]["update"], true);
+
+        // A pinned app still reports the new release, but not as an update to act on.
+        lib.set_policy("foo-app", Policy::Pinned).unwrap();
+        assert_eq!(check_all(&lib, &http2).unwrap()[0]["update"], false);
+        assert_eq!(list_apps(&lib).unwrap()[0]["update"], false);
+        assert_eq!(
+            app_detail(&lib, "foo-app").unwrap()["source"]["update"],
+            false
+        );
+        lib.set_policy("foo-app", Policy::Notify).unwrap();
 
         let u = update_app(&lib, &http2, "foo-app", &mut |_, _| {}).unwrap();
         assert_eq!(

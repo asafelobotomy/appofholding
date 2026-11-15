@@ -173,7 +173,7 @@ Kirigami.ApplicationWindow {
 
     function countUpdates(list) {
         var n = 0
-        for (var i = 0; i < list.length; i++) if (list[i].status === "update-available") n++
+        for (var i = 0; i < list.length; i++) if (list[i].update === true) n++
         return n
     }
 
@@ -272,6 +272,7 @@ Kirigami.ApplicationWindow {
                 } else if (data.fresh.length > 0) {
                     root.announce(data.fresh)
                 } else if (manual && tray.visible) {
+                    root.announcedApp = ""   // about all apps, not the one an earlier message named
                     tray.showMessage("appOFholding", summary, Platform.SystemTrayIcon.Information, 5000)
                 }
                 break

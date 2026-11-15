@@ -15,20 +15,29 @@ ColumnLayout {
     spacing: Kirigami.Units.largeSpacing
 
     // Simple improvements for this app on this computer, each one click to apply or dismiss.
+    // Finding them unpacks the AppImage, so it runs as a task; the answer comes to onFinished.
     property var suggestions: []
     function loadSuggestions() {
         if (!tab.appId || !tab.backend) return
-        var r = Util.parse(tab.backend.suggestions(tab.appId))
-        tab.suggestions = r.error ? [] : r
+        tab.backend.start("suggestions", "", tab.appId, "", "")
+    }
+    function showSuggestions(r) {
+        // An answer for another app (this page moved on, or another page asked) is not ours.
+        if (r.id !== tab.appId) return
+        tab.suggestions = r.error ? [] : r.list
     }
     onDetailChanged: loadSuggestions()
-    onAppIdChanged: { applying = ""; loadSuggestions() }
+    onAppIdChanged: { applying = ""; suggestions = []; loadSuggestions() }
 
     // The suggestion being applied. Applying runs as a task, since some go online first.
     property string applying: ""
     Connections {
         target: tab.backend
         function onFinished(kind, id, ok, payload) {
+            if (kind === "suggestions") {
+                tab.showSuggestions(ok ? Util.parse(payload) : {})
+                return
+            }
             if (kind !== "applySuggestion" || id !== tab.appId) return
             // The window reports the outcome (also when this page was closed meanwhile).
             tab.applying = ""

@@ -193,6 +193,7 @@ impl Plan {
         let mut helper_child = None;
         let mut keep_alive = None; // dropping this ends the helper
         if let Some(h) = &self.helper {
+            remove_stale_proxy_sockets(&h.ready);
             let _ = std::fs::remove_file(&h.ready); // a stale socket would look like success
             let (reader, writer) =
                 std::io::pipe().map_err(|e| Error::Other(format!("pipe: {e}")))?;
@@ -250,6 +251,52 @@ impl Plan {
             c.current_dir(d);
         }
         c
+    }
+}
+
+/// File name of the filtered-bus socket for one launch of `id` by process `pid`. Unique per
+/// launch (pid plus a time-based suffix), so concurrent instances never touch each other's.
+pub fn proxy_socket_name(id: &str, pid: u32) -> String {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    format!("appofholding-{id}-bus-{pid}-{nanos:x}x{n}")
+}
+
+/// The pid in a [`proxy_socket_name`], and the part before it (`appofholding-<id>-bus`).
+fn split_proxy_socket_name(name: &str) -> Option<(&str, u32)> {
+    let mut parts = name.rsplitn(3, '-');
+    let suffix = parts.next()?;
+    let pid = parts.next()?.parse().ok()?;
+    let stem = parts.next()?;
+    (!suffix.is_empty() && stem.starts_with("appofholding-") && stem.ends_with("-bus"))
+        .then_some((stem, pid))
+}
+
+/// Remove sockets of the same app left behind by launches whose process is gone (killed before
+/// it could clean up). Sockets of running instances are left alone.
+fn remove_stale_proxy_sockets(own: &Path) {
+    let (Some(dir), Some((stem, _))) = (
+        own.parent(),
+        own.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(split_proxy_socket_name),
+    ) else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let Some((s, pid)) = name.to_str().and_then(split_proxy_socket_name) else {
+            continue;
+        };
+        if s == stem && !Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 

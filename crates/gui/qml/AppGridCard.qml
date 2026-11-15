@@ -9,7 +9,7 @@ Rectangle {
     required property var app
     readonly property real downloading: applicationWindow().progress[app.id] !== undefined ? applicationWindow().progress[app.id] : -2
     readonly property bool busy: downloading > -2
-    readonly property bool hasUpdate: app.status === "update-available"
+    readonly property bool hasUpdate: app.update === true
     readonly property bool hasProblem: !!app.error
     readonly property color accent: hasUpdate ? Kirigami.Theme.positiveTextColor
         : hasProblem ? Kirigami.Theme.neutralTextColor

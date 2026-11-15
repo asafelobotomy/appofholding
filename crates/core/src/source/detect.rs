@@ -33,7 +33,8 @@ pub struct App<'a> {
 impl App<'_> {
     /// The names the app goes by, lowercased with only letters and digits left: its display
     /// name, its program, its desktop file and icon names (the last part of a reverse-DNS id).
-    /// Very short ones are left out, as they would match almost anything.
+    /// Very short ones, and words any AppImage's file name may carry ("app", "linux",
+    /// "x86_64"), are left out, as they would match almost anything.
     pub fn names(&self) -> Vec<String> {
         let last = |s: &str| {
             s.trim_end_matches(".desktop")
@@ -48,17 +49,118 @@ impl App<'_> {
             squash(&last(self.desktop_path.rsplit('/').next().unwrap_or(""))),
             squash(&last(self.entry.main("Icon").unwrap_or(""))),
         ];
-        v.retain(|n| n.len() >= 3);
+        v.retain(|n| n.len() >= 3 && !is_generic(n));
         v.sort();
         v.dedup();
         v
     }
 }
 
-/// Whether a file name (a release asset) carries one of the app's `names`.
+/// Words that say nothing about which app a file is: they appear in the names of AppImages of
+/// every kind. Compared squashed (lowercase letters and digits only).
+const GENERIC: &[&str] = &[
+    "app",
+    "apps",
+    "application",
+    "appimage",
+    "appimagekit",
+    "image",
+    "img",
+    "linux",
+    "gnu",
+    "x86",
+    "x8664",
+    "x64",
+    "amd64",
+    "i386",
+    "i686",
+    "arm",
+    "arm64",
+    "aarch64",
+    "armhf",
+    "armv7",
+    "bin",
+    "run",
+    "apprun",
+    "exe",
+    "desktop",
+    "launcher",
+    "setup",
+    "install",
+    "installer",
+    "portable",
+    "release",
+    "latest",
+    "stable",
+    "beta",
+    "alpha",
+    "nightly",
+    "dev",
+    "main",
+    "electron",
+    "client",
+    "gui",
+    "tool",
+    "tools",
+    "icon",
+    "default",
+    "program",
+    "x11",
+    "wayland",
+];
+
+fn is_generic(squashed: &str) -> bool {
+    GENERIC.contains(&squashed) || squashed.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A file name's words, lowercased: split at anything but letters and digits, between letters
+/// and digits, and before an upper-case letter that follows a lower-case one
+/// (`AV-MorningStar-0.4.2-x86_64` -> av, morning, star, 0, 4, 2, x, 86, 64).
+fn words(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev: Option<char> = None;
+    for c in s.chars() {
+        if !c.is_ascii_alphanumeric() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            prev = None;
+            continue;
+        }
+        let split = prev.is_some_and(|p| {
+            p.is_ascii_digit() != c.is_ascii_digit()
+                || (p.is_ascii_lowercase() && c.is_ascii_uppercase())
+        });
+        if split && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+        cur.push(c.to_ascii_lowercase());
+        prev = Some(c);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Whether a file name (a release asset) carries one of the app's `names` as whole words: one
+/// word or several in a row (`AV-Morning-Star` carries `avmorningstar`), never part of a word
+/// (`keynote` does not carry `note`). Generic names ("app", "linux") never count.
 pub fn resembles(file_name: &str, names: &[String]) -> bool {
-    let f = squash(file_name);
-    names.iter().any(|n| f.contains(n.as_str()))
+    let w = words(file_name);
+    names.iter().filter(|n| !is_generic(n)).any(|n| {
+        (0..w.len()).any(|i| {
+            let mut joined = String::new();
+            for word in &w[i..] {
+                joined.push_str(word);
+                if joined.len() >= n.len() {
+                    return joined == *n;
+                }
+            }
+            false
+        })
+    })
 }
 
 /// Every candidate, most trustworthy first, without duplicates.

@@ -10,6 +10,8 @@ use crate::image::AppImage;
 use crate::paths::Dirs;
 
 const MARKER: &str = ".appofholding-complete";
+/// `<extract dir>/.lock-<sha256>` serialises unpacking one version.
+const LOCK_PREFIX: &str = ".lock-";
 
 pub fn path_for(dirs: &Dirs, sha256: &str) -> PathBuf {
     dirs.extract_dir().join(sha256)
@@ -20,7 +22,9 @@ pub fn is_extracted(dirs: &Dirs, sha256: &str) -> bool {
 }
 
 /// Make sure `appimage` is unpacked; returns the directory. Unpacks into a temporary
-/// directory first, so an interrupted extraction never looks complete.
+/// directory first, so an interrupted extraction never looks complete. Concurrent first
+/// launches of the same version take turns (a lock file per hash): the second one finds the
+/// tree complete and uses it, so a tree an app is already running from is never replaced.
 pub fn ensure(dirs: &Dirs, appimage: &Path, sha256: &str) -> Result<PathBuf> {
     let dest = path_for(dirs, sha256);
     if is_extracted(dirs, sha256) {
@@ -28,6 +32,17 @@ pub fn ensure(dirs: &Dirs, appimage: &Path, sha256: &str) -> Result<PathBuf> {
     }
     let root = dirs.extract_dir();
     fs::create_dir_all(&root).map_err(Error::io(&root))?;
+    let lock_path = root.join(format!("{LOCK_PREFIX}{sha256}"));
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(Error::io(&lock_path))?;
+    lock.lock().map_err(Error::io(&lock_path))?; // released when `lock` is dropped
+    if is_extracted(dirs, sha256) {
+        return Ok(dest); // another launch finished while we waited
+    }
     let tmp = root.join(format!(
         ".tmp-{}-{}",
         &sha256[..sha256.len().min(12)],
@@ -38,17 +53,15 @@ pub fn ensure(dirs: &Dirs, appimage: &Path, sha256: &str) -> Result<PathBuf> {
     let result = (|| -> Result<()> {
         AppImage::open(appimage)?.extract_to(&tmp)?;
         fs::write(tmp.join(MARKER), b"").map_err(Error::io(&tmp))?;
-        if is_extracted(dirs, sha256) {
-            // Another launch finished first and may already be running from it: use theirs.
-            let _ = fs::remove_dir_all(&tmp);
-            return Ok(());
-        }
-        let _ = fs::remove_dir_all(&dest); // a stale incomplete directory
+        // Under the lock nobody else can complete this tree, so whatever is here is a stale
+        // incomplete directory from an interrupted run.
+        let _ = fs::remove_dir_all(&dest);
         fs::rename(&tmp, &dest).map_err(Error::io(&dest))
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&tmp);
     }
+    drop(lock);
     result.map(|()| dest)
 }
 
@@ -62,6 +75,13 @@ pub fn prune(dirs: &Dirs, keep: &[String]) -> Result<usize> {
     let mut removed = 0;
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
+        // The lock file of a version nobody keeps any more.
+        if let Some(hash) = name.strip_prefix(LOCK_PREFIX) {
+            if !keep.iter().any(|k| k == hash) && e.path().is_file() {
+                let _ = fs::remove_file(e.path());
+            }
+            continue;
+        }
         if keep.contains(&name) || !e.path().is_dir() {
             continue;
         }
@@ -153,6 +173,57 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_first_launches_share_one_tree() {
+        let (_t, dirs, img) = setup();
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let (dirs, img) = (dirs.clone(), img.clone());
+                std::thread::spawn(move || ensure(&dirs, &img, "same").unwrap())
+            })
+            .collect();
+        let outs: Vec<PathBuf> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert!(outs.iter().all(|o| o == &outs[0]));
+        assert!(is_extracted(&dirs, "same"));
+        assert_eq!(
+            fs::read(outs[0].join("usr/share/data/a.txt")).unwrap(),
+            b"a"
+        );
+    }
+
+    #[test]
+    fn extraction_never_writes_through_or_over_an_existing_link() {
+        // The fixture writer refuses duplicate names, so plant what an earlier entry of a
+        // malicious image (a symlink with the same name) would have left in the tree.
+        let (tmp, _dirs, img) = setup();
+        let image = AppImage::open(&img).unwrap();
+        let victim = tmp.path().join("victim");
+        fs::write(&victim, b"original").unwrap();
+        let outside_dir = tmp.path().join("outside");
+        fs::create_dir(&outside_dir).unwrap();
+
+        // A link where a file goes: not followed, not replaced.
+        let dest = tmp.path().join("d1");
+        fs::create_dir(&dest).unwrap();
+        std::os::unix::fs::symlink(&victim, dest.join("AppRun")).unwrap();
+        assert!(image.extract_to(&dest).is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"original");
+
+        // A link where a parent directory goes: nothing is created through it.
+        let dest = tmp.path().join("d2");
+        fs::create_dir(&dest).unwrap();
+        std::os::unix::fs::symlink(&outside_dir, dest.join("usr")).unwrap();
+        assert!(image.extract_to(&dest).is_err());
+        assert_eq!(fs::read_dir(&outside_dir).unwrap().count(), 0);
+
+        // A file where a symlink goes: not replaced.
+        let dest = tmp.path().join("d3");
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        fs::write(dest.join("usr/lib/libfoo.so.1"), b"mine").unwrap();
+        assert!(image.extract_to(&dest).is_err());
+        assert_eq!(fs::read(dest.join("usr/lib/libfoo.so.1")).unwrap(), b"mine");
+    }
+
+    #[test]
     fn failed_extraction_leaves_nothing_that_looks_complete() {
         let (tmp, dirs, _) = setup();
         let bad = tmp.path().join("bad.AppImage");
@@ -162,6 +233,8 @@ mod tests {
         let leftovers: Vec<_> = fs::read_dir(dirs.extract_dir())
             .unwrap()
             .flatten()
+            // The (empty) lock file stays; `prune` removes it once no app needs the hash.
+            .filter(|e| !e.file_name().to_string_lossy().starts_with(LOCK_PREFIX))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
@@ -183,7 +256,10 @@ mod tests {
             .unwrap();
         // A stray file is not a tree and is left alone.
         fs::write(dirs.extract_dir().join("stray"), b"x").unwrap();
+        assert!(dirs.extract_dir().join(".lock-drop").is_file());
         assert_eq!(prune(&dirs, &["keep".to_string()]).unwrap(), 2);
+        assert!(!dirs.extract_dir().join(".lock-drop").exists());
+        assert!(dirs.extract_dir().join(".lock-keep").exists());
         assert!(is_extracted(&dirs, "keep") && !is_extracted(&dirs, "drop"));
         assert!(busy.exists() && !old.exists());
         assert_eq!(

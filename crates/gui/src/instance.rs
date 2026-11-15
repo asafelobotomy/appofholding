@@ -138,6 +138,19 @@ pub fn forward(path: &Path, req: &Request) -> bool {
 /// listener's own thread). False when the socket cannot be made; the program then just runs
 /// without the single-window behaviour.
 pub fn listen(path: &Path, handle: impl Fn(Request) + Send + 'static) -> bool {
+    // Two copies starting at once after a crash could both find the socket stale, and the
+    // second would remove the one the first just made. Taking turns on a lock file next to it
+    // makes the check, the removal and the new socket one step.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.with_extension("lock"))
+        .ok();
+    if let Some(f) = &lock {
+        // Without the lock (an odd file system) this just goes ahead as before.
+        let _ = f.lock();
+    }
     // A socket file left by a copy that crashed: nobody answers it, so it can go.
     if path.exists() && UnixStream::connect(path).is_err() {
         let _ = std::fs::remove_file(path);
@@ -145,6 +158,7 @@ pub fn listen(path: &Path, handle: impl Fn(Request) + Send + 'static) -> bool {
     let Ok(listener) = UnixListener::bind(path) else {
         return false;
     };
+    drop(lock); // closing the file releases the lock for the next copy
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));

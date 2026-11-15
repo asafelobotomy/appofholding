@@ -140,10 +140,15 @@ impl AppImage {
         )))
     }
 
-    /// Unpack the whole image into `dest` (which must exist). Paths are confined to `dest`,
-    /// setuid/setgid bits are dropped, and device nodes/sockets are skipped.
+    /// Unpack the whole image into `dest` (which must exist and should be empty). Paths are
+    /// confined to `dest`, setuid/setgid bits are dropped, and device nodes/sockets are skipped.
+    ///
+    /// Nothing is ever written through or over an existing entry: a squashfs may list the same
+    /// name twice (a symlink `x -> ~/.bashrc`, then a file `x`), so a file or link whose name
+    /// is already taken is an error, and every parent directory must be a real directory, not
+    /// a symlink the image created earlier.
     pub fn extract_to(&self, dest: &Path) -> Result<()> {
-        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
         for node in self.fs.files() {
             let rel: PathBuf = node
                 .fullpath
@@ -160,27 +165,34 @@ impl AppImage {
             let mode = (node.header.permissions as u32) & 0o777;
             match &node.inner {
                 InnerNode::Dir(_) => {
-                    fs::create_dir_all(&target).map_err(Error::io(&target))?;
-                    // Keep owner access so extraction (and later cleanup) always works.
+                    ensure_real_dirs(dest, &rel)?;
+                    // Keep owner access so extraction (and later cleanup) always works. The path
+                    // was just checked to be a real directory, so this cannot follow a link.
                     fs::set_permissions(&target, fs::Permissions::from_mode(mode | 0o700))
                         .map_err(Error::io(&target))?;
                 }
                 InnerNode::File(f) => {
-                    if let Some(parent) = target.parent() {
-                        fs::create_dir_all(parent).map_err(Error::io(parent))?;
+                    if let Some(parent) = rel.parent() {
+                        ensure_real_dirs(dest, parent)?;
                     }
-                    let mut out = File::create(&target).map_err(Error::io(&target))?;
+                    // `create_new` (O_CREAT|O_EXCL) fails on any existing entry and never follows a
+                    // symlink, dangling ones included.
+                    let mut out = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&target)
+                        .map_err(Error::io(&target))?;
                     std::io::copy(&mut self.fs.file(f).reader(), &mut out)
                         .map_err(|e| Error::Squashfs(format!("{}: {e}", rel.display())))?;
-                    drop(out);
-                    fs::set_permissions(&target, fs::Permissions::from_mode(mode | 0o400))
+                    out.set_permissions(fs::Permissions::from_mode(mode | 0o400))
                         .map_err(Error::io(&target))?;
                 }
                 InnerNode::Symlink(s) => {
-                    if let Some(parent) = target.parent() {
-                        fs::create_dir_all(parent).map_err(Error::io(parent))?;
+                    if let Some(parent) = rel.parent() {
+                        ensure_real_dirs(dest, parent)?;
                     }
-                    let _ = fs::remove_file(&target);
+                    // Fails if the name is already taken; never replaces anything.
                     symlink(&s.link, &target).map_err(Error::io(&target))?;
                 }
                 _ => {}
@@ -193,6 +205,36 @@ impl AppImage {
         let p = normalize(Path::new(path));
         self.fs.files().any(|n| n.fullpath == p)
     }
+}
+
+/// Make sure `dest/rel` and each directory between `dest` and it is a real directory, creating
+/// missing ones. A symlink (or a file) anywhere on the way is an error, so nothing can be
+/// written outside `dest` through a link the image planted.
+pub(crate) fn ensure_real_dirs(dest: &Path, rel: &Path) -> Result<()> {
+    let mut cur = dest.to_path_buf();
+    for c in rel.components() {
+        let Component::Normal(name) = c else {
+            return Err(Error::Squashfs(format!(
+                "unexpected path component in {}",
+                rel.display()
+            )));
+        };
+        cur.push(name);
+        match fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(Error::Squashfs(format!(
+                    "{} is not a directory (the image lists it twice or links it elsewhere)",
+                    cur.display()
+                )));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&cur).map_err(Error::io(&cur))?;
+            }
+            Err(e) => return Err(Error::io(&cur)(e)),
+        }
+    }
+    Ok(())
 }
 
 /// Make `p` absolute within the image and resolve `.`/`..` lexically.

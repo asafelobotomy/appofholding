@@ -28,7 +28,13 @@ starts the app without the sandbox once, for debugging.
 - The filtered session bus uses `xdg-dbus-proxy`: portals, notifications and tray icons work;
   other services are invisible. Apps may own the D-Bus names their `.desktop` files declare, as
   long as those have at least three parts and are not the desktop's own (`org.freedesktop.*`,
-  `org.gnome.*`, KDE's wallet and shell, ...).
+  `org.gnome.*`, KDE's wallet and shell, ...). For tray icons they may also own the names a
+  StatusNotifierItem uses inside the sandbox (`org.kde.StatusNotifierItem-<pid>-<n>` for the
+  first few pids and icons; on the host those pids are kernel threads, so no real app's icon
+  can be taken over). Each launch gets its own proxy socket.
+- Shared folders (`--allow`) are checked before every launch: `/`, `/proc`, `/sys`, `/dev` and
+  `/run` (and anything inside them) are refused however they are spelled, including through a
+  symlink, and a path containing `..` is refused outright.
 - Chromium and Electron apps cannot nest their own sandbox inside this one, so `--no-sandbox` is
   added automatically (`--chromium-workaround false` turns that off).
 

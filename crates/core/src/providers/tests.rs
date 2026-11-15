@@ -192,3 +192,93 @@ fn plain_url_identity_prefers_etag() {
     assert_eq!(rel.assets[0].name, "Foo.AppImage");
     assert_eq!(rel.assets[0].size, Some(99));
 }
+
+#[test]
+fn plain_url_names_ignore_the_query_and_end_in_appimage() {
+    let url = "https://example.com/dl/Foo%20Bar.AppImage?x=1";
+    let http = FakeHttp::default().status(url, 200, &[("etag", "\"e1\"")]);
+    let rel = fetch_release(&http, &src(url)).unwrap();
+    assert_eq!(rel.assets[0].name, "Foo Bar.AppImage");
+
+    // No file name in the link at all: the server's name wins, else a sane fallback.
+    let url = "https://www.vendor.com/dl?os=linux";
+    let http = FakeHttp::default().status(
+        url,
+        200,
+        &[
+            ("etag", "\"e1\""),
+            (
+                "content-disposition",
+                "attachment; filename=\"../Vendor-3.1.AppImage\"",
+            ),
+        ],
+    );
+    let rel = fetch_release(&http, &src(url)).unwrap();
+    assert_eq!(rel.assets[0].name, "Vendor-3.1.AppImage");
+    let http = FakeHttp::default().status(
+        url,
+        200,
+        &[(
+            "content-disposition",
+            "attachment; filename=x.bin; filename*=UTF-8''Vendor%E2%80%933.1.AppImage",
+        )],
+    );
+    assert_eq!(
+        fetch_release(&http, &src(url)).unwrap().assets[0].name,
+        "Vendor\u{2013}3.1.AppImage"
+    );
+    let http = FakeHttp::default().status(url, 200, &[("etag", "\"e1\"")]);
+    assert_eq!(
+        fetch_release(&http, &src(url)).unwrap().assets[0].name,
+        "dl.AppImage"
+    );
+}
+
+#[test]
+fn a_plain_link_is_its_own_asset_and_can_update() {
+    use crate::assets::Arch;
+    use crate::check::check;
+    use crate::version::{Installed, Status};
+    let url = "https://www.vendor.com/dl?os=linux";
+    let http = FakeHttp::default().status(url, 200, &[("etag", "\"v2\"")]);
+    let s = src(url);
+    let installed = Installed {
+        version: Some("v1"),
+        sha256: None,
+    };
+    let r = check(&http, &s, &installed, Arch::X86_64).unwrap();
+    assert!(r.problem().is_none(), "{:?}", r.problem());
+    assert_eq!(r.asset().unwrap().url, url);
+    assert_eq!(r.status, Status::UpdateAvailable);
+    // Even with a pattern saved (as installing from a link does) the link stays selected.
+    let mut s = s;
+    s.asset_pattern = Some("Something-*.AppImage".into());
+    assert!(
+        check(&http, &s, &installed, Arch::X86_64)
+            .unwrap()
+            .asset()
+            .is_some()
+    );
+}
+
+#[test]
+fn a_plain_link_without_any_identifier_is_unknown_not_an_update() {
+    use crate::assets::Arch;
+    use crate::check::check;
+    use crate::version::{Installed, Status};
+    let url = "https://example.com/Foo.AppImage";
+    let http = FakeHttp::default().status(url, 200, &[]);
+    let r = check(
+        &http,
+        &src(url),
+        &Installed {
+            version: Some("1.0"),
+            sha256: None,
+        },
+        Arch::X86_64,
+    )
+    .unwrap();
+    assert_eq!(r.release.tag, "");
+    assert_eq!(r.status, Status::Unknown);
+    assert!(r.problem().unwrap().contains("cannot be told"));
+}

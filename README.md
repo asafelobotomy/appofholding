@@ -35,7 +35,9 @@ tool (`appofholding`) that share one library.
 
 ## Install
 
-Build from source (needs Rust 1.89+, Qt 6 with QtQuick, Kirigami, CMake and a C++ compiler):
+Build from source (needs Rust 1.90+, Qt 6 with QtQuick and Qt SVG, Kirigami, CMake and a C++
+compiler; to run, the GUI also needs qqc2-desktop-style, the `org.kde.desktop` Qt Quick
+Controls style, plus `bubblewrap` and `xdg-dbus-proxy`):
 
 ```bash
 make

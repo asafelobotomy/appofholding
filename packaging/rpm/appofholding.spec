@@ -15,6 +15,7 @@ BuildRequires:  qt6-qtdeclarative-devel
 Requires:       bubblewrap
 Requires:       xdg-dbus-proxy
 Requires:       qt6-qtdeclarative
+Requires:       qt6-qtsvg
 Requires:       kf6-kirigami
 Requires:       kf6-qqc2-desktop-style
 Recommends:     zsync

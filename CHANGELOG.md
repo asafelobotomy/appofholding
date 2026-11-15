@@ -3,10 +3,10 @@
 ## Unreleased
 
 - **Find an update source for AppImages that carry no update information.** appOFholding reads
-  the hints inside the AppImage (electron-builder's `app-update.yml`, AppStream project links,
-  `io.github.OWNER.REPO`-style app ids from any of its desktop files, icon or window class, and,
-  failing those, a link to its own repository inside its program, as Tauri apps carry) and
-  offers **Get updates from …** as a suggestion; import results mention it too. Accepting it
+  the hints inside the AppImage (electron-builder's `app-update.yml` and AppStream project links;
+  when neither gives anything, a link to its own repository inside its program, as Tauri apps
+  carry; then `io.github.OWNER.REPO`-style app ids from any of its desktop files, icon or window
+  class) and offers **Get updates from …** as a suggestion; import results mention it too. Accepting it
   confirms that the project's newest release has an AppImage for this computer, named like the
   app or identical to the installed file, before saving the source. Applying suggestions in the
   app now runs in the background.
@@ -70,6 +70,60 @@
 - The interface now creates a Qt Widgets application, so the tray icon also works on panels that
   only offer the older XEmbed tray. Packages gain a dependency on Qt Labs Platform (part of
   `qt6-declarative` on Arch and Fedora; `qml6-module-qt-labs-platform` on Debian/Ubuntu).
+
+### Security
+
+- **A sandboxed app could switch its own sandbox off.** The menu entry passed the AppImage's own
+  `Exec=` arguments straight after `appofholding run <id>`, where `--unsandboxed` or
+  `--profile` were still read as options. They now follow `--`, and menu entries made by
+  earlier versions are rewritten the first time the library is opened.
+- Unpacking an AppImage (for sandboxed or unpacked launches) no longer writes through, or over,
+  a symlink, so a crafted image cannot place files outside its folder.
+- Shared folders for a sandbox reject `..` and every spelling of, or symlink into, `/`, `/proc`,
+  `/sys`, `/dev` and `/run`.
+- `apply --allow-commands` is now also needed when a file sets launch arguments or environment
+  variables, turns the sandbox off, gives full bus access or a writable home, shares folders, or
+  (with `--prune`) removes a sandbox.
+- Repeated `[Desktop Entry]` groups or `Exec=` lines in an AppImage's desktop file are merged, so
+  every launch line goes through appOFholding.
+
+### Fixed
+
+- Pinned apps and skipped versions no longer count as updates anywhere: the app cards, the
+  banner, *Update all*, the tray, `check --json` (whose rows gain `update`) and `check --notify`
+  now agree with `list --json` and uQ.
+- Plain download links with a query string, or no file name in the URL, can update; the file
+  name comes from the server. A server that gives no ETag, Last-Modified or size shows
+  *unknown* with the reason instead of an update that never goes away.
+- An automatic update that keeps failing is announced once, as "update failed", instead of
+  "update check failed" on every run.
+- zsync delta updates are verified against the release's size and checksum (or the control
+  file's SHA-1); a mismatch falls back to a full download.
+- The version shown after an update prefers the desktop file, then the release tag, over stale
+  AppStream metadata; AppStream releases written over several lines are read.
+- Suggested sources no longer match a release just because its file name contains a word like
+  "app" or "linux".
+- `appofholding source test` gives the same answer as `check` for an app in the library.
+- `appofholding check` exits non-zero when a check fails (`--json` still exits 0). `add FILE`
+  refuses `--asset`/`--channel`, which only apply to links. `launch set` no longer overwrites a
+  profile it could not read, and a corrupt saved profile is reported instead of emptied.
+- Config entries need an id written as a slug (`scale-tail`, not `Scale Tail`); before, such an
+  entry was half applied and failed on every later run.
+- Two copies of an app no longer break each other's D-Bus connection, and two first launches of
+  a sandboxed app no longer race to unpack it.
+- Tray icons work for sandboxed apps on the filtered bus.
+- A hook that writes a lot of errors no longer hangs until it times out.
+- Removing an app also deletes its kept previous versions.
+- The window no longer freezes while an app's Overview loads its suggestions or while the
+  background timer is switched on or off, and the switch shows the real state after a failed
+  change. Testing a source no longer marks the app as busy updating.
+- Two copies of the interface starting at once after a crash no longer orphan the single-window
+  socket, and a failed restart after a self-update keeps the window reachable.
+- Corrected texts: when a policy installs updates (only the background timer does), the
+  sandbox's home folder, and the tray message after a manual check.
+- Packaging and docs: the minimum Rust version is 1.90 (required by `backhand`); the rpm and deb
+  packages depend on Qt SVG; README, CONTRIBUTING and AGENTS list the real build and test
+  commands.
 
 ## 0.5.0
 

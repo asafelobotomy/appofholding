@@ -60,15 +60,20 @@ pub fn project_urls(text: &str) -> Vec<String> {
 pub fn newest_release(text: &str) -> Option<String> {
     let mut rest = text;
     let mut best: Option<String> = None;
-    while let Some(at) = rest.find("<release ") {
-        rest = &rest[at + 9..];
+    while let Some(at) = rest.find("<release") {
+        rest = &rest[at + "<release".len()..];
+        // Any whitespace may follow the tag name; `<releases>` is a different element.
+        if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
+            continue;
+        }
         let Some(end) = rest.find('>') else { break };
-        if let Some(v) = attr(&rest[..end], "version").filter(|v| !v.trim().is_empty()) {
+        let found = attr(&rest[..end], "version");
+        if let Some(v) = found.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
             let newer = best
                 .as_deref()
-                .is_none_or(|b| version::compare(&v, b) == Some(Ordering::Greater));
+                .is_none_or(|b| version::compare(v, b) == Some(Ordering::Greater));
             if newer {
-                best = Some(v.trim().to_string());
+                best = Some(v.to_string());
             }
         }
     }
@@ -161,6 +166,17 @@ mod tests {
         assert_eq!(
             newest_release(r#"<release version="nightly"/><release version="x"/>"#).as_deref(),
             Some("nightly")
+        );
+    }
+
+    #[test]
+    fn release_tags_split_over_lines_and_padded_versions_are_read() {
+        let xml = "<releases>\n<release\n  version=\"1.2.0\"/>\n<release\tversion=\" 1.10.0 \" date=\"x\"/>\n<release version=\"1.9.0\"/>\n</releases>";
+        assert_eq!(newest_release(xml).as_deref(), Some("1.10.0"));
+        // A padded first entry is compared trimmed, so a smaller later one doesn't replace it.
+        assert_eq!(
+            newest_release(r#"<release version=" 2.0 "/><release version="1.5"/>"#).as_deref(),
+            Some("2.0")
         );
     }
 

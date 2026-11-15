@@ -44,7 +44,7 @@ fn add_list_info_run_remove_roundtrip() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let desktop = root.join("data/applications/appofholding-foo-app.desktop");
     let text = fs::read_to_string(&desktop).unwrap();
-    assert!(text.contains(" run foo-app --flag %U"), "{text}");
+    assert!(text.contains(" run foo-app -- --flag %U"), "{text}");
 
     assert!(stdout(&run(root, &["list"])).contains("foo-app"));
     assert!(stdout(&run(root, &["info", "foo-app"])).contains("sha256"));
@@ -926,4 +926,72 @@ fn list_check_and_schedule_print_json() {
         v,
         serde_json::json!({"version": 1, "installed": false, "interval": null})
     );
+}
+
+#[test]
+fn text_check_fails_when_a_check_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let o = run(root, &["check", "nope"]);
+    assert!(!o.status.success(), "{}", stdout(&o));
+    assert!(stdout(&o).contains("nope"), "{}", stdout(&o));
+
+    // Every row is printed before the failure, and `--json` still exits 0 (uQ reads the rows).
+    add_fixture(root);
+    let o = run(
+        root,
+        &[
+            "source",
+            "set",
+            "foo-app",
+            "http://127.0.0.1:9/Foo.AppImage",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = run(root, &["check"]);
+    assert!(!o.status.success());
+    assert!(stdout(&o).contains("foo-app") && stdout(&o).contains("error:"));
+    assert!(err(&o).contains("1 check(s) failed"), "{}", err(&o));
+    json_of(&run(root, &["check", "--json"]));
+}
+
+#[test]
+fn add_refuses_link_options_for_a_local_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let img = root.join("Foo.AppImage");
+    fs::write(&img, fixture::simple_appimage("Foo App", None)).unwrap();
+    for opt in ["--asset", "--channel"] {
+        let o = run(root, &["add", img.to_str().unwrap(), opt, "x"]);
+        assert!(!o.status.success());
+        assert!(
+            err(&o).contains("only apply when adding from a link"),
+            "{}",
+            err(&o)
+        );
+    }
+    assert!(stdout(&run(root, &["list"])).contains("No apps yet"));
+}
+
+#[test]
+fn launch_set_creates_a_profile_but_reports_a_missing_app() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let o = run(root, &["launch", "set", "nope", "--args=-x"]);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("no app with id 'nope'"), "{}", err(&o));
+
+    add_fixture(root);
+    let o = run(
+        root,
+        &[
+            "launch",
+            "set",
+            "foo-app",
+            "--profile",
+            "safe",
+            "--args=--safe-mode",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
 }

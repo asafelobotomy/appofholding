@@ -3,6 +3,11 @@
 //! The parser keeps every group, key, comment and blank line in order so that rewriting an
 //! entry only changes what we explicitly touch (Gear Lever #306/#369: desktop actions and
 //! other keys must survive integration).
+//!
+//! The one exception is duplicates: a repeated group is merged into its first occurrence and a
+//! repeated key within a group is dropped, so every key has exactly one value. Desktops disagree
+//! about which duplicate wins (GLib takes the last one), and a second `Exec=` that we did not
+//! rewrite would otherwise start the app past our launcher.
 
 use crate::error::{Error, Result};
 
@@ -57,7 +62,28 @@ impl DesktopEntry {
         if e.group(MAIN).is_none() {
             return Err(Error::DesktopEntry("missing [Desktop Entry] group".into()));
         }
+        e.dedupe();
         Ok(e)
+    }
+
+    /// Merge repeated groups into their first occurrence and keep only the first value of each
+    /// key within a group.
+    fn dedupe(&mut self) {
+        let mut groups: Vec<Group> = Vec::with_capacity(self.groups.len());
+        for g in std::mem::take(&mut self.groups) {
+            match groups.iter_mut().find(|x| x.name == g.name) {
+                Some(first) => first.lines.extend(g.lines),
+                None => groups.push(g),
+            }
+        }
+        for g in &mut groups {
+            let mut seen = std::collections::HashSet::new();
+            g.lines.retain(|l| match l {
+                Line::Kv { key, .. } => seen.insert(key.clone()),
+                Line::Raw(_) => true,
+            });
+        }
+        self.groups = groups;
     }
 
     fn group(&self, name: &str) -> Option<&Group> {
@@ -221,6 +247,28 @@ pub fn quote_exec_arg(arg: &str) -> String {
     s.replace('\\', "\\\\")
 }
 
+/// Quote a token that came from [`split_exec`] so it means the same thing again. Unlike
+/// [`quote_exec_arg`] it keeps `%` sequences exactly as written: the token is still in the
+/// field-code language (`%%` is a literal percent sign, `%U` a field code), so `%%` stays `%%`.
+pub fn quote_exec_token(token: &str) -> String {
+    let special = |c: char| c.is_whitespace() || "\"'\\><~|&;$*?#()`".contains(c);
+    if token.is_empty() {
+        return "\"\"".into();
+    }
+    if !token.chars().any(special) {
+        return token.to_string();
+    }
+    let mut s = String::from("\"");
+    for c in token.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            s.push('\\');
+        }
+        s.push(c);
+    }
+    s.push('"');
+    s.replace('\\', "\\\\")
+}
+
 pub fn join_exec(args: &[String]) -> String {
     args.iter()
         .map(|a| quote_exec_arg(a))
@@ -287,6 +335,35 @@ mod tests {
         let joined = join_exec(&args);
         assert_eq!(split_exec(&joined), args);
         assert_eq!(quote_exec_arg("/usr/bin/foo"), "/usr/bin/foo");
+    }
+
+    #[test]
+    fn duplicate_groups_and_keys_collapse_to_the_first() {
+        let text = "[Desktop Entry]\nName=A\nExec=good\nExec=evil\n[Desktop Action x]\nExec=x1\n[Desktop Entry]\nExec=evil2\nIcon=i\n[Desktop Action x]\nExec=x2\n";
+        let mut e = DesktopEntry::parse(text).unwrap();
+        e.set(MAIN, "Exec", "wrapped");
+        e.set("Desktop Action x", "Exec", "wrapped-x");
+        let r = e.render();
+        assert_eq!(r.matches("[Desktop Entry]").count(), 1, "{r}");
+        assert_eq!(r.matches("[Desktop Action x]").count(), 1, "{r}");
+        assert_eq!(r.matches("Exec=").count(), 2, "{r}");
+        assert!(!r.contains("evil") && !r.contains("x2"), "{r}");
+        assert!(r.contains("Icon=i\n"), "{r}");
+    }
+
+    #[test]
+    fn tokens_keep_their_percent_sequences() {
+        for t in ["%%", "50%%", "--fmt=%%d %%s", "%U", "a b%%"] {
+            let q = quote_exec_token(t);
+            assert_eq!(split_exec(&q), vec![t.to_string()], "{q}");
+        }
+        assert_eq!(quote_exec_token("%%"), "%%");
+        let orig = "AppRun --percent=100%% %U";
+        let again: Vec<String> = split_exec(orig)
+            .iter()
+            .map(|t| quote_exec_token(t))
+            .collect();
+        assert_eq!(again.join(" "), orig);
     }
 
     #[test]

@@ -12,7 +12,7 @@ ThemedPage {
     readonly property var backend: applicationWindow().backendObject
     readonly property var src: d.source || null
     readonly property real downloading: applicationWindow().progress[appId] !== undefined ? applicationWindow().progress[appId] : -2
-    readonly property bool hasUpdate: !!src && src.status === "update-available"
+    readonly property bool hasUpdate: !!src && src.update === true
     // Lets other parts jump to a tab (e.g. "Change source" from the overview).
     property alias tabIndex: tabs.currentIndex
 

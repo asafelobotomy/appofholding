@@ -10,7 +10,7 @@
 //! portal document store, and a Chromium/Electron app has to turn off its own (nested) sandbox.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -182,29 +182,39 @@ impl Settings {
 
     pub fn validate(&self) -> Result<()> {
         for g in &self.paths {
+            let shown = g.path.display();
             if !g.path.is_absolute() {
-                return Err(Error::Other(format!(
-                    "{} is not an absolute path",
-                    g.path.display()
-                )));
+                return Err(Error::Other(format!("{shown} is not an absolute path")));
             }
-            let s = g.path.to_string_lossy();
-            if s == "/"
-                || ["/proc", "/sys", "/dev", "/run"]
-                    .iter()
-                    .any(|p| s == *p || s.starts_with(&format!("{p}/")))
-            {
-                return Err(Error::Other(format!(
-                    "{} cannot be shared with a sandbox",
-                    g.path.display()
-                )));
-            }
-            if s.contains('\0') {
+            if g.path.as_os_str().as_encoded_bytes().contains(&0) {
                 return Err(Error::Other("paths cannot contain NUL bytes".into()));
+            }
+            // `..` could climb out of an allowed folder into a forbidden one (`/usr/../run`).
+            if g.path.components().any(|c| c == Component::ParentDir) {
+                return Err(Error::Other(format!(
+                    "{shown} contains `..`; give the folder's real path"
+                )));
+            }
+            // `components` already drops `.` and collapses repeated slashes (`//run` -> `/run`);
+            // a symlink to a forbidden place is caught through its resolved path.
+            let lexical: PathBuf = g.path.components().collect();
+            let resolved = std::fs::canonicalize(&g.path).ok();
+            if forbidden_share(&lexical) || resolved.as_deref().is_some_and(forbidden_share) {
+                return Err(Error::Other(format!(
+                    "{shown} cannot be shared with a sandbox"
+                )));
             }
         }
         Ok(())
     }
+}
+
+/// The root and the kernel/runtime trees, which a sandbox must never see from the host.
+fn forbidden_share(p: &Path) -> bool {
+    p == Path::new("/")
+        || ["/proc", "/sys", "/dev", "/run"]
+            .iter()
+            .any(|f| p.starts_with(f))
 }
 
 /// What the sandbox builder needs to know about the machine.
@@ -306,7 +316,6 @@ pub struct Sandboxed {
 }
 
 pub struct Launch<'a> {
-    pub id: &'a str,
     /// The unpacked AppImage.
     pub appdir: &'a Path,
     /// The original AppImage (exposed read-only as `$APPIMAGE`).

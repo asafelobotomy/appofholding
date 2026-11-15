@@ -29,6 +29,15 @@ impl Db {
         Ok(())
     }
 
+    /// Ids of the apps that have `key` set.
+    pub fn apps_with_setting(&self, key: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT app_id FROM app_settings WHERE key = ?1 ORDER BY app_id")?;
+        let rows = stmt.query_map([key], |r| r.get(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn put_profile(&self, app_id: &str, name: &str, p: &Profile) -> Result<()> {
         self.conn.execute(
             "INSERT INTO launch_profiles (app_id,name,args,env,prefix,presets,cwd,extract_and_run,elevated)
@@ -55,14 +64,13 @@ impl Db {
             "SELECT * FROM launch_profiles WHERE app_id = ?1 ORDER BY name != 'default', name",
         )?;
         let rows = stmt.query_map([app_id], |r| {
-            let parse = |col: &str| -> rusqlite::Result<String> { r.get(col) };
             Ok((
                 r.get::<_, String>("name")?,
                 Profile {
-                    args: serde_json::from_str(&parse("args")?).unwrap_or_default(),
-                    env: serde_json::from_str(&parse("env")?).unwrap_or_default(),
-                    prefix: serde_json::from_str(&parse("prefix")?).unwrap_or_default(),
-                    presets: serde_json::from_str(&parse("presets")?).unwrap_or_default(),
+                    args: json_column(r, "args")?,
+                    env: json_column(r, "env")?,
+                    prefix: json_column(r, "prefix")?,
+                    presets: json_column(r, "presets")?,
                     cwd: r.get::<_, Option<String>>("cwd")?.map(PathBuf::from),
                     extract_and_run: r.get("extract_and_run")?,
                     elevated: r.get("elevated")?,
@@ -143,4 +151,17 @@ impl Db {
         let rows = stmt.query_map([app_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+}
+
+/// A JSON column of a launch profile. A value that does not parse is an error, not an empty
+/// setting: silently dropping e.g. a prefix or arguments would change how the app starts.
+fn json_column<T: serde::de::DeserializeOwned>(r: &Row<'_>, col: &str) -> rusqlite::Result<T> {
+    let text: String = r.get(col)?;
+    serde_json::from_str(&text).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("corrupt launch profile {col}: {e}").into(),
+        )
+    })
 }

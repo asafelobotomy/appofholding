@@ -56,7 +56,10 @@ Most AppImage build tools do it for you:
 - **linuxdeploy** with the AppImage plugin: set `LDAI_UPDATE_INFORMATION` to the same string.
 
 Publish the matching `.zsync` file next to each release asset. appOFholding reads it to learn the
-build's identity (SHA-1) without downloading the whole file.
+build's identity (SHA-1) without downloading the whole file. When the `zsync` tool is installed
+appOFholding uses the control file for a delta update, and checks the rebuilt file against the
+control file's SHA-1 and length (and the release's SHA-256, where there is one) before using it;
+if it does not match, the full file is downloaded instead.
 
 Check the result with:
 
@@ -66,6 +69,9 @@ appofholding info MyApp.AppImage      # shows "update info: ..."
 
 ## Tips
 
+- Put `X-AppImage-Version=` in the desktop file. appOFholding shows the version from there first,
+  then the release tag it installed, and only then the newest `<release>` in your AppStream
+  metadata (which is easy to forget to bump).
 - Name release files consistently (`NAME-VERSION-x86_64.AppImage`) so the glob stays simple.
 - Do not wrap an AppImage in a `.zip` or `.tar` archive; updaters cannot see inside.
 - GitHub publishes a SHA-256 digest for every release asset; appOFholding verifies downloads

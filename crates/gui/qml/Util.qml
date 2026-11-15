@@ -19,11 +19,6 @@ QtObject {
         return (i === 0 ? v : v.toFixed(1)) + " " + units[i]
     }
 
-    function fmtTime(unix) {
-        if (!unix) return qsTr("never")
-        return new Date(unix * 1000).toLocaleString(Qt.locale(), Locale.ShortFormat)
-    }
-
     // "5 minutes ago", "2 hours ago", "3 days ago"
     function ago(unix) {
         if (!unix) return qsTr("never checked")

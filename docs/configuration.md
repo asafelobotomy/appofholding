@@ -12,9 +12,15 @@ the entry has a `source`, or added from a local `file`; apps not mentioned in th
 touched. `--dry-run` shows what would happen, `--no-install` skips downloads, and `--prune`
 also removes extra profiles, hooks and sandboxes the file does not list.
 
-Entries that would make appOFholding run commands (hooks, a profile's command prefix, or a
-profile that starts the app as root) are refused unless you add `--allow-commands`, so a file
-from someone else cannot slip them in. `--dry-run` lists every such command; read them first.
+Entries that would make appOFholding run commands or weaken an app's sandbox are refused unless
+you add `--allow-commands`, so a file from someone else cannot slip them in: hooks, a profile's
+command prefix, arguments or environment variables, a profile that starts the app as root, and
+sandbox settings with `level = "none"`, `bus = "full"`, `home = "rw"` or any `allow` folders
+(with `--prune`, an entry without a `[app.sandbox]` section for a sandboxed app counts too,
+since it turns the sandbox off). `--dry-run` lists every such entry; read them first.
+
+App ids are written the way appOFholding makes them: lowercase letters, digits and `-`
+(`scale-tail`, not `Scale Tail`). A file with any other id is rejected with the id to use.
 
 ```toml
 version = 1

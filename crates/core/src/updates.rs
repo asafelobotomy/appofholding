@@ -152,15 +152,11 @@ impl Library {
             }
         }
         self.db.upsert_source(&rec.id, &source)?;
+        // A link whose server names no version or change marker leaves nothing to remember.
+        let tag = Some(report.release.tag.as_str()).filter(|t| !t.trim().is_empty());
+        self.db.record_installed(&rec.id, tag, Some(&sha))?;
         self.db
-            .record_installed(&rec.id, Some(&report.release.tag), Some(&sha))?;
-        self.db.record_check(
-            &rec.id,
-            now(),
-            Some("up-to-date"),
-            None,
-            Some(&report.release.tag),
-        )?;
+            .record_check(&rec.id, now(), Some("up-to-date"), None, tag)?;
         Ok((rec, report))
     }
 }

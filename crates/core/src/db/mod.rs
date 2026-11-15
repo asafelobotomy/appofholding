@@ -29,7 +29,7 @@ const MIGRATIONS: &[&str] = &[
     // v2: update sources and their tracked state
     "CREATE TABLE sources (
         app_id           TEXT PRIMARY KEY REFERENCES apps(id) ON DELETE CASCADE,
-        provider         TEXT NOT NULL,     -- github | gitlab | forgejo | url
+        provider         TEXT NOT NULL,     -- github | gitlab | forgejo | url | zsync
         host             TEXT,              -- gitlab / forgejo only
         location         TEXT NOT NULL,     -- owner/repo, project path, or URL
         channel          TEXT NOT NULL,     -- stable | pre | any | tag
@@ -91,6 +91,10 @@ const MIGRATIONS: &[&str] = &[
         value  TEXT NOT NULL,
         PRIMARY KEY (app_id, key)
      );",
+    // v8: menu entries written before `run <id> --` must be regenerated (an entry's own
+    // arguments could otherwise be read as options of `run`); `Library::open` does it.
+    "INSERT OR IGNORE INTO app_settings (app_id, key, value)
+     SELECT id, 'reintegrate', '1' FROM apps;",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

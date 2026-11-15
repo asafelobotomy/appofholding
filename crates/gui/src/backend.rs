@@ -100,12 +100,6 @@ pub mod qobject {
         fn launch(self: &Backend, id: &QString) -> QString;
         #[qinvokable]
         fn remove(self: &Backend, id: &QString, purge: bool) -> QString;
-        #[cxx_name = "scheduleInstall"]
-        #[qinvokable]
-        fn schedule_install(self: &Backend, interval: &QString) -> QString;
-        #[cxx_name = "scheduleRemove"]
-        #[qinvokable]
-        fn schedule_remove(self: &Backend) -> QString;
         /// The saved colour theme: system, gruvbox-dark or gruvbox-light.
         #[qinvokable]
         fn theme(self: &Backend) -> QString;
@@ -118,10 +112,6 @@ pub mod qobject {
         #[cxx_name = "setView"]
         #[qinvokable]
         fn set_view(self: &Backend, name: &QString) -> QString;
-        /// Suggested improvements for an app: JSON array of {key, title, detail, action,
-        /// dismissible}, or {"error": ...}.
-        #[qinvokable]
-        fn suggestions(self: &Backend, id: &QString) -> QString;
         #[cxx_name = "dismissSuggestion"]
         #[qinvokable]
         fn dismiss_suggestion(self: &Backend, id: &QString, key: &QString) -> QString;
@@ -143,7 +133,7 @@ pub mod qobject {
         fn set_hook(self: &Backend, id: &QString, kind: &QString, command: &QString) -> QString;
 
         // ---- slow work, answered through `finished`
-        // kind: notifyCheck | check | update | resolve | install | addFile | prepare | selfCheck | selfUpdate | importScan | importRun | applySuggestion
+        // kind: notifyCheck | check | update | resolve | install | addFile | selfCheck | selfUpdate | importScan | importRun | applySuggestion | suggestions | scheduleInstall | scheduleRemove
         #[qinvokable]
         fn start(
             self: Pin<&mut Backend>,
@@ -266,6 +256,9 @@ impl qobject::Backend {
         })())
     }
     pub fn listen(self: Pin<&mut Self>) {
+        self.answer_later_starts();
+    }
+    fn answer_later_starts(&self) {
         let Some(path) = crate::instance::socket_path() else {
             return;
         };
@@ -347,12 +340,6 @@ impl qobject::Backend {
     pub fn remove(&self, id: &QString, purge: bool) -> QString {
         unit(with_lib(|l| service::remove_app(l, &s(id), purge)))
     }
-    pub fn schedule_install(&self, interval: &QString) -> QString {
-        unit(with_dirs(|d| service::schedule_install(d, &s(interval))))
-    }
-    pub fn schedule_remove(&self) -> QString {
-        unit(with_dirs(service::schedule_remove))
-    }
     pub fn theme(&self) -> QString {
         q(&current_theme())
     }
@@ -367,9 +354,6 @@ impl qobject::Backend {
     pub fn set_view(&self, name: &QString) -> QString {
         unit(with_dirs(|d| service::view_save(d, &s(name))))
     }
-    pub fn suggestions(&self, id: &QString) -> QString {
-        json_or_err(with_lib(|l| service::suggestions(l, &s(id))))
-    }
     pub fn dismiss_suggestion(&self, id: &QString, key: &QString) -> QString {
         unit(with_lib(|l| {
             service::dismiss_suggestion(l, &s(id), &s(key))
@@ -377,17 +361,23 @@ impl qobject::Backend {
     }
     pub fn relaunch(&self) -> QString {
         // Let the new copy take over the single-window socket instead of handing its start
-        // back to this one, which is about to quit.
-        if let Some(path) = crate::instance::socket_path() {
-            crate::instance::release(&path);
+        // back to this one, which is about to quit. That has to happen before the spawn.
+        let socket = crate::instance::socket_path();
+        if let Some(path) = &socket {
+            crate::instance::release(path);
         }
         // The AppImage file or the package's binary, which now hold the new version.
-        unit(service::gui_exe().and_then(|exe| {
+        let r = service::gui_exe().and_then(|exe| {
             std::process::Command::new(exe)
                 .spawn()
                 .map(|_| ())
                 .map_err(|e| format!("could not start the new version: {e}"))
-        }))
+        });
+        if r.is_err() && socket.is_some() {
+            // No new copy: this one keeps running, so it must stay reachable.
+            self.answer_later_starts();
+        }
+        unit(r)
     }
     pub fn import_restore(&self) -> QString {
         json_or_err(with_lib(service::import_restore))
@@ -415,14 +405,20 @@ impl qobject::Backend {
         c: &QString,
     ) {
         let (kind, id, a, b, c) = (s(kind), s(id), s(a), s(b), s(c));
-        let n = *self.tasks() + 1;
-        self.as_mut().set_tasks(n);
+        // Background reads (see `QUIET_TASKS`) neither count as work nor show progress.
+        let quiet = QUIET_TASKS.contains(&kind.as_str());
+        if !quiet {
+            let n = *self.tasks() + 1;
+            self.as_mut().set_tasks(n);
+        }
         // Tasks about one app report under its id; the others under "@<kind>", so an install
         // and a self-update never share a progress bar.
         let key = progress_key(&kind, &id);
         // Mark the task busy at once, so a second click cannot start the same work again before
         // the first real progress report arrives.
-        self.as_mut().progress(&q(&key), -1.0);
+        if !quiet {
+            self.as_mut().progress(&q(&key), -1.0);
+        }
         let thread = self.qt_thread();
         std::thread::spawn(move || {
             let progress_thread = thread.clone();
@@ -440,7 +436,7 @@ impl qobject::Backend {
                 } else {
                     (f - last).abs() >= 0.005
                 };
-                if visible {
+                if visible && !quiet {
                     last = f;
                     last_at = std::time::Instant::now();
                     let pid = progress_id.clone();
@@ -466,13 +462,19 @@ impl qobject::Backend {
                 Err(e) => (false, e),
             };
             let _ = thread.queue(move |mut qobj: Pin<&mut qobject::Backend>| {
-                let left = (*qobj.tasks() - 1).max(0);
-                qobj.as_mut().set_tasks(left);
+                if !quiet {
+                    let left = (*qobj.tasks() - 1).max(0);
+                    qobj.as_mut().set_tasks(left);
+                }
                 qobj.as_mut().finished(&q(&kind), &q(&id), ok, &q(&payload));
             });
         });
     }
 }
+
+/// Tasks that only read, in the background, for one page: they are not work the user started,
+/// so they do not count in `tasks` (which disables buttons) or show progress.
+const QUIET_TASKS: [&str; 1] = ["suggestions"];
 
 /// The key a task's progress is reported under (see `start`).
 pub fn progress_key(kind: &str, id: &str) -> String {
@@ -502,7 +504,6 @@ fn run_task(
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),
         // a = path or file:// URL, b = move | copy | in-place
         "addFile" => with_lib(|l| service::add_file(l, a, b)),
-        // a = "force" to skip the cache
         // a = options JSON {mode, replaceEntries}; b = JSON array of the chosen file paths
         "importScan" => {
             let opts: Value = serde_json::from_str(a).map_err(|e| e.to_string())?;
@@ -519,6 +520,7 @@ fn run_task(
                 .ok_or("$HOME is not set")?;
             with_lib(|l| service::import_run(l, &home, &opts, &paths))
         }
+        // a = "force" to skip the cache
         "selfCheck" => service::self_check(
             &http,
             appofholding_core::selfupdate::detect_current(),
@@ -533,11 +535,17 @@ fn run_task(
         // a = suggestion key; payload {"message": ...}. A task because applying one may go
         // online (to confirm a detected update source).
         "applySuggestion" => with_lib(|l| service::apply_suggestion(l, &http, id, a)),
-        "prepare" => with_lib(|l| {
-            l.prepare_launch(id)
-                .map(|()| json!({"ok": true}))
-                .map_err(|e| e.to_string())
+        // Suggested improvements for app a (unpacks the AppImage, so not on the interface
+        // thread): {"id": a, "list": [{key, title, detail, action, dismissible}]}, or
+        // {"id": a, "error": ...}; always ok, so the page can tell which app it is about.
+        // Started without an id, so it never touches that app's progress.
+        "suggestions" => Ok(match with_lib(|l| service::suggestions(l, a)) {
+            Ok(list) => json!({ "id": a, "list": list }),
+            Err(e) => json!({ "id": a, "error": e }),
         }),
+        // systemctl can take a while. a = hourly | daily | weekly
+        "scheduleInstall" => with_dirs(|d| service::schedule_install(d, a)).map(|()| json!({})),
+        "scheduleRemove" => with_dirs(service::schedule_remove).map(|()| json!({})),
         other => Err(format!("unknown task '{other}'")),
     }
 }

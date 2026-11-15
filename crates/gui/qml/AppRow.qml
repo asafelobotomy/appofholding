@@ -10,7 +10,7 @@ Rectangle {
     readonly property var app: modelData
     readonly property real downloading: applicationWindow().progress[app.id] !== undefined ? applicationWindow().progress[app.id] : -2
     readonly property bool busy: downloading > -2
-    readonly property bool hasUpdate: app.status === "update-available"
+    readonly property bool hasUpdate: app.update === true
     readonly property bool hasProblem: !!app.error
     // Below this width only the name, version and buttons are shown.
     readonly property bool narrow: width < Kirigami.Units.gridUnit * 32

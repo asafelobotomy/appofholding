@@ -223,3 +223,39 @@ fn app_names_and_resemblance() {
     ));
     assert!(!resembles("search-plugins-x86_64.AppImage", &app.names()));
 }
+
+#[test]
+fn generic_names_never_count_as_resemblance() {
+    let e = DesktopEntry::parse(
+        "[Desktop Entry]\nType=Application\nName=App\nExec=app %U\nIcon=com.foo.app\n",
+    )
+    .unwrap();
+    let app = App {
+        desktop_path: "/linux.desktop",
+        entry: &e,
+        name: "App",
+    };
+    assert!(app.names().is_empty(), "{:?}", app.names());
+    assert!(!resembles("Whatever-1.0-x86_64.AppImage", &app.names()));
+    // Generic names passed in directly do not match either.
+    let generic: Vec<String> = ["app", "image", "img", "linux", "x8664"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert!(!resembles("Other-1.0-linux-x86_64.AppImage", &generic));
+}
+
+#[test]
+fn names_only_match_whole_words() {
+    let names = vec!["note".to_string()];
+    assert!(resembles("Note-2.1-x86_64.AppImage", &names));
+    assert!(resembles("note_2.1.AppImage", &names));
+    assert!(!resembles("Joplin-Notebook-2.1.AppImage", &names));
+    assert!(!resembles("keynote-2.1.AppImage", &names));
+    // Several words in a row, and camel case.
+    let names = vec!["morningstar".to_string(), "app2".to_string()];
+    assert!(resembles("MorningStar-0.4.2.AppImage", &names));
+    assert!(resembles("Morning_Star-0.4.2.AppImage", &names));
+    assert!(resembles("app2-1.4.0-x86_64.AppImage", &names));
+    assert!(!resembles("happ2-1.4.0.AppImage", &names));
+}

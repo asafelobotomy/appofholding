@@ -30,12 +30,17 @@ impl Library {
             let pre = checked.remove(&id);
             out.push(match self.scheduled_one(http, notifier, &rec, &name, pre) {
                 Ok(o) => o,
-                Err(e) => {
+                Err((stage, e)) => {
                     // Say so once per distinct problem, not on every run, and never for apps the
-                    // user asked to keep quiet about.
+                    // user asked to keep quiet about. Both a failed check and a failed update
+                    // leave their message in `last_error`, so this compares like with like.
                     let new_problem = rec.last_error.as_deref() != Some(e.to_string().as_str());
                     if new_problem && rec.policy != Policy::Manual {
-                        notifier.notify(&format!("{name}: update check failed"), &e.to_string());
+                        let what = match stage {
+                            Stage::Check => "update check failed",
+                            Stage::Update => "update failed",
+                        };
+                        notifier.notify(&format!("{name}: {what}"), &e.to_string());
                     }
                     Outcome::Failed {
                         id,
@@ -90,8 +95,9 @@ impl Library {
         rec: &SourceRecord,
         name: &str,
         pre: Option<Result<CheckState>>,
-    ) -> Result<Outcome> {
+    ) -> std::result::Result<Outcome, (Stage, Error)> {
         let id = rec.app_id.clone();
+        let check_err = |e| (Stage::Check, e);
         if rec.policy == Policy::Pinned {
             return Ok(Outcome::Skipped {
                 id,
@@ -103,23 +109,26 @@ impl Library {
                 if_running: IfRunning::Defer,
                 ..ApplyOptions::default()
             };
-            return Ok(match self.update(http, &id, &opts, &mut |_, _| {})? {
-                Applied::Updated { from, to, .. } => {
-                    notifier.notify(
-                        &format!("{name} updated"),
-                        &format!("Now at {to}. The new version starts next time you open it."),
-                    );
-                    Outcome::Updated { id, from, to }
-                }
-                Applied::NoUpdate(_) => Outcome::UpToDate { id },
-                Applied::Skipped(reason) => Outcome::Skipped { id, reason },
-                Applied::Deferred { version, .. } => Outcome::Deferred { id, version },
-            });
+            return Ok(
+                match self.update_staged(http, &id, &opts, &mut |_, _| {})? {
+                    Applied::Updated { from, to, .. } => {
+                        notifier.notify(
+                            &format!("{name} updated"),
+                            &format!("Now at {to}. The new version starts next time you open it."),
+                        );
+                        Outcome::Updated { id, from, to }
+                    }
+                    Applied::NoUpdate(_) => Outcome::UpToDate { id },
+                    Applied::Skipped(reason) => Outcome::Skipped { id, reason },
+                    Applied::Deferred { version, .. } => Outcome::Deferred { id, version },
+                },
+            );
         }
         let state = match pre {
-            Some(r) => r?,
-            None => self.check_impl(http, &id, true)?,
-        };
+            Some(r) => r,
+            None => self.check_impl(http, &id, true),
+        }
+        .map_err(check_err)?;
         if state.status != Status::UpdateAvailable {
             return Ok(Outcome::UpToDate { id });
         }
@@ -139,7 +148,9 @@ impl Library {
                     "Version {version} is available. Run `appofholding update {id}` to install it."
                 ),
             );
-            self.db.set_notified(&id, Some(&version))?;
+            self.db
+                .set_notified(&id, Some(&version))
+                .map_err(check_err)?;
             notified = true;
         }
         Ok(Outcome::Available {

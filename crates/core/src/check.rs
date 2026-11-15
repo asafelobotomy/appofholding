@@ -4,7 +4,7 @@ use crate::assets::{self, Arch, Asset, Selection};
 use crate::error::Result;
 use crate::http::Http;
 use crate::providers::{self, Release};
-use crate::source::Source;
+use crate::source::{Provider, Source};
 use crate::version::{self, Installed, Status};
 
 #[derive(Debug, Clone)]
@@ -27,6 +27,11 @@ impl Report {
     /// Human-readable reason when no single asset could be chosen.
     pub fn problem(&self) -> Option<String> {
         match &self.selection {
+            Selection::One(_) if self.release.tag.trim().is_empty() => Some(
+                "the server gives nothing to tell versions apart (no ETag, Last-Modified or \
+                 Content-Length), so whether there is an update cannot be told"
+                    .into(),
+            ),
             Selection::One(_) => None,
             Selection::None => Some(format!(
                 "release {} has no AppImage matching your pattern/architecture (assets: {})",
@@ -71,7 +76,12 @@ pub fn evaluate(
     installed: &Installed<'_>,
     arch: Arch,
 ) -> Report {
-    let selection = assets::select(&release.assets, source.asset_pattern.as_deref(), arch);
+    let selection = match (&source.provider, release.assets.as_slice()) {
+        // A plain link is the AppImage itself: its one file is the download, whatever it is
+        // called and whatever pattern was saved with it.
+        (Provider::Url { .. }, [only]) => Selection::One(only.clone()),
+        _ => assets::select(&release.assets, source.asset_pattern.as_deref(), arch),
+    };
     let status = match selection.asset() {
         Some(asset) => version::decide(
             installed,

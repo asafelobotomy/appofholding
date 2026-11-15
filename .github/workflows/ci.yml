@@ -56,8 +56,8 @@ jobs:
         run: /usr/lib/qt6/bin/qmllint crates/gui/qml/*.qml || true
 
   # The uQ widget and Settings page (uq/), loaded with a fake uQ context. `uqctl integrations
-  # check uq/` is not run here yet: no uQ release ships it (it lands in uQ 0.4.0), and building
-  # uqctl from source pulls in all of uQ. Run it locally until then.
+  # check uq/` is not run here yet: it is in the uQ 0.3.0 release candidates but no stable
+  # release, and building uqctl from source pulls in all of uQ. Run it locally until then.
   uq:
     name: uQ integration (QML)
     runs-on: ubuntu-24.04

@@ -14,7 +14,6 @@ ColumnLayout {
     property bool dirty: false
 
     readonly property bool enabledSandbox: s.level !== "none"
-    readonly property var levels: ["none", "standard", "strict"]
 
     spacing: Kirigami.Units.largeSpacing
 
@@ -58,7 +57,9 @@ ColumnLayout {
         title: qsTr("Protection")
         iconName: "security-high"
         subtitle: sec.enabledSandbox
-            ? qsTr("Limits what this app can see and do. It runs from an unpacked copy with its own private home folder.")
+            ? (sec.s.home === "ro" || sec.s.home === "rw"
+                ? qsTr("Limits what this app can see and do. It runs from an unpacked copy and can see your home folder (see Files below).")
+                : qsTr("Limits what this app can see and do. It runs from an unpacked copy with its own private home folder."))
             : qsTr("Off: the app runs like any other program, with access to your files, network and devices. Pick Standard or Strict to limit it.")
 
         RowLayout {

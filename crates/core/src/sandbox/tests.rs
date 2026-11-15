@@ -50,7 +50,6 @@ const FULL: &[&str] = &[
 
 fn launch<'a>(env: &'a BTreeMap<String, String>, args: &'a [String]) -> Launch<'a> {
     Launch {
-        id: "foo",
         appdir: Path::new("/cache/extracted/abc"),
         appimage: Path::new("/home/u/Applications/Foo.AppImage"),
         private_home: Path::new("/data/apps/foo/home"),
@@ -124,9 +123,73 @@ fn path_grants_are_validated() {
         "/sys/devices",
         "/dev/dri",
         "/run/user/1000",
+        // Spellings of the same places that a plain prefix test would miss.
+        "/usr/../run/user/1000",
+        "/home/u/../../proc",
+        "//run/user/1000",
+        "/./run",
+        "//",
+        "/sys/",
     ] {
         assert!(mk(bad).validate().is_err(), "{bad} should be refused");
     }
+    // `/running` is not `/run`.
+    assert!(mk("/running/x").validate().is_ok());
+}
+
+#[test]
+fn a_shared_symlink_into_a_forbidden_tree_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let link = tmp.path().join("innocent");
+    std::os::unix::fs::symlink("/proc/self", &link).unwrap();
+    let s = Settings {
+        paths: vec![PathGrant {
+            path: link.clone(),
+            write: false,
+        }],
+        ..Settings::for_level(Level::Standard)
+    };
+    assert!(
+        s.validate().is_err(),
+        "{} should be refused",
+        link.display()
+    );
+    let to_root = tmp.path().join("root");
+    std::os::unix::fs::symlink("/", &to_root).unwrap();
+    let s = Settings {
+        paths: vec![PathGrant {
+            path: to_root,
+            write: true,
+        }],
+        ..Settings::for_level(Level::Standard)
+    };
+    assert!(s.validate().is_err());
+}
+
+#[test]
+fn the_filtered_bus_lets_tray_icons_register() {
+    let env = BTreeMap::new();
+    let s = build(
+        &Settings::for_level(Level::Standard),
+        &host(FULL),
+        &launch(&env, &[]),
+    )
+    .unwrap();
+    let h = s.helper.unwrap();
+    assert!(
+        h.argv
+            .contains(&"--talk=org.kde.StatusNotifierWatcher".to_string())
+    );
+    assert!(
+        h.argv
+            .contains(&"--own=org.kde.StatusNotifierItem-2-1".to_string())
+    );
+    // Exact names only: never a wildcard over every tray icon on the bus.
+    assert!(
+        !h.argv
+            .iter()
+            .any(|a| a.starts_with("--own=org.kde.StatusNotifierItem") && a.ends_with('*'))
+    );
 }
 
 #[test]
@@ -591,7 +654,6 @@ fn run_in(
 ) -> std::process::Output {
     let host = real_host(&rig.home, &rig.dir.path().join("run"));
     let l = Launch {
-        id: "foo",
         appdir: &rig.appdir,
         appimage: &rig.image,
         private_home: &rig.private,

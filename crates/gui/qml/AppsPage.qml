@@ -9,10 +9,10 @@ ThemedPage {
 
     property string query: ""
     readonly property var allApps: applicationWindow().apps
-    readonly property int updateCount: allApps.filter(function (a) { return a.status === "update-available" }).length
+    readonly property int updateCount: allApps.filter(function (a) { return a.update === true }).length
 
     // Most urgent first: updates, then apps whose check failed, then everything else by name.
-    function rank(a) { return a.status === "update-available" ? 0 : (a.error ? 1 : 2) }
+    function rank(a) { return a.update === true ? 0 : (a.error ? 1 : 2) }
     function groupName(a) {
         var r = rank(a)
         return r === 0 ? qsTr("Updates available") : r === 1 ? qsTr("Needs attention") : qsTr("Apps")
@@ -125,7 +125,7 @@ ThemedPage {
                         var a = page.allApps
                         var busy = applicationWindow().progress
                         for (var i = 0; i < a.length; i++)
-                            if (a[i].status === "update-available" && busy[a[i].id] === undefined)
+                            if (a[i].update === true && busy[a[i].id] === undefined)
                                 applicationWindow().backendObject.start("update", a[i].id, "", "", "")
                     }
                 }
@@ -208,7 +208,8 @@ ThemedPage {
                             required property var modelData
                             app: modelData
                             width: line.cell
-                            // Tiles in a line share the tallest height so the edges align.
+                            // Each tile is at least 10 grid units tall, so most lines come
+                            // out even; a tile with more to show grows on its own.
                             height: Math.max(implicitHeight, Kirigami.Units.gridUnit * 10)
                         }
                     }

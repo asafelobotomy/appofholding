@@ -586,3 +586,131 @@ fn an_imported_app_identical_to_the_release_is_up_to_date_and_remembered() {
     assert_eq!(rec.installed_version.as_deref(), Some("v3.0.0"));
     assert_eq!(rec.installed_digest.as_deref(), Some(sha.as_str()));
 }
+
+#[test]
+fn a_persistent_update_failure_is_announced_once_and_named_as_such() {
+    let e = env();
+    installed(&e);
+    e.lib.set_policy("foo-app", Policy::Auto).unwrap();
+    // The release is there, but its file cannot be downloaded.
+    let mut http = github("2.0.0");
+    http.responses.remove("https://dl/foo-2.0.0");
+    let notes = Recorder::default();
+    for _ in 0..3 {
+        let out = e.lib.run_scheduled(&http, &notes).unwrap();
+        assert!(matches!(&out[0], Outcome::Failed { .. }), "{out:?}");
+    }
+    {
+        let told = notes.0.borrow();
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert_eq!(told[0].0, "Foo App: update failed");
+    }
+    let s = e.lib.source("foo-app").unwrap().unwrap();
+    assert!(s.last_error.is_some());
+    assert_eq!(s.last_status.as_deref(), Some("update-available"));
+
+    // A check that fails is worded as one.
+    e.lib.set_policy("foo-app", Policy::Notify).unwrap();
+    e.lib.run_scheduled(&FakeHttp::default(), &notes).unwrap();
+    assert_eq!(
+        notes.0.borrow().last().unwrap().0,
+        "Foo App: update check failed"
+    );
+}
+
+#[test]
+fn the_installed_release_tag_beats_stale_appstream_metadata() {
+    let e = env();
+    installed(&e);
+    // No X-AppImage-Version, and metainfo whose newest <release> was never bumped.
+    let img = fixture::build_appimage(
+        Some(UPD),
+        vec![
+            fixture::Item::File(
+                "/io.github.o.foo.desktop",
+                b"[Desktop Entry]\nType=Application\nName=Foo App\nExec=foo\nIcon=icon\n".to_vec(),
+            ),
+            fixture::Item::File("/icon.png", fixture::png(64)),
+            fixture::Item::File(
+                "/usr/share/metainfo/io.github.o.foo.appdata.xml",
+                br#"<component><id>io.github.o.foo.desktop</id><releases><release version="1.0.0"/></releases></component>"#.to_vec(),
+            ),
+        ],
+    );
+    let sha = hex::encode(Sha256::digest(&img));
+    let rel = format!(
+        r#"{{"tag_name":"v2.0.0","prerelease":false,"draft":false,"assets":[
+              {{"name":"Foo-2.0.0-x86_64.AppImage","browser_download_url":"https://dl/x","size":{},"digest":"sha256:{sha}"}}]}}"#,
+        img.len()
+    );
+    let http = FakeHttp::default()
+        .json(API, &rel)
+        .bytes("https://dl/x", img);
+    apply(&e, &http, &ApplyOptions::default()).unwrap();
+    assert_eq!(
+        e.lib.get("foo-app").unwrap().version.as_deref(),
+        Some("v2.0.0")
+    );
+}
+
+#[test]
+fn testing_an_unsaved_source_answers_like_check() {
+    let e = env();
+    let app = installed(&e);
+    let sha1 = image::sha1_file(&app.appimage_path).unwrap();
+    let control = |sha1: &str| {
+        format!("zsync: 0.6.2\nFilename: Foo.AppImage\nSHA-1: {sha1}\nURL: Foo.AppImage\n\n")
+            .into_bytes()
+    };
+    let zs = crate::source::parse_input("zsync|https://h/Foo.AppImage.zsync")
+        .unwrap()
+        .source;
+    let same = FakeHttp::default().bytes("https://h/Foo.AppImage.zsync", control(&sha1));
+    let r = e.lib.test_source(&same, "foo-app", &zs).unwrap();
+    assert_eq!(r.status, Status::UpToDate);
+    let other = FakeHttp::default().bytes("https://h/Foo.AppImage.zsync", control("00ff"));
+    assert_eq!(
+        e.lib.test_source(&other, "foo-app", &zs).unwrap().status,
+        Status::UpdateAvailable
+    );
+    // Nothing about the saved source changed.
+    let s = e.lib.source("foo-app").unwrap().unwrap();
+    assert_ne!(s.source, zs);
+    assert!(s.last_checked.is_none());
+
+    // The same file as the release's is up to date, as `check` says.
+    if Arch::host() == Arch::X86_64 {
+        let gh = crate::source::parse_input("o/bar").unwrap().source;
+        let rel = format!(
+            r#"{{"tag_name":"v9.0.0","prerelease":false,"draft":false,"assets":[
+              {{"name":"Foo-9.0.0-x86_64.AppImage","browser_download_url":"https://dl/x","size":1,"digest":"sha256:{}"}}]}}"#,
+            app.sha256
+        );
+        let http =
+            FakeHttp::default().json("https://api.github.com/repos/o/bar/releases/latest", &rel);
+        assert_eq!(
+            e.lib.test_source(&http, "foo-app", &gh).unwrap().status,
+            Status::UpToDate
+        );
+    }
+}
+
+#[test]
+fn only_actionable_updates_count() {
+    let e = env();
+    installed(&e);
+    let avail = Some("update-available");
+    assert!(counts_as_update(avail, Some("v2"), None));
+    assert!(!counts_as_update(Some("up-to-date"), Some("v2"), None));
+    assert!(!counts_as_update(None, None, None));
+    let rec = || e.lib.source("foo-app").unwrap().unwrap();
+    assert!(counts_as_update(avail, Some("v2"), Some(&rec())));
+    e.lib.set_policy("foo-app", Policy::Pinned).unwrap();
+    assert!(!counts_as_update(avail, Some("v2"), Some(&rec())));
+    e.lib.set_policy("foo-app", Policy::Notify).unwrap();
+    e.lib.check(&github("2.0.0"), "foo-app").unwrap();
+    e.lib.skip_latest("foo-app").unwrap();
+    assert!(!counts_as_update(avail, Some("v2.0.0"), Some(&rec())));
+    assert!(counts_as_update(avail, Some("v3.0.0"), Some(&rec())));
+    assert!(counts_as_update(avail, None, Some(&rec())));
+}

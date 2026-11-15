@@ -198,3 +198,29 @@ fn a_plan_really_runs_with_its_args_env_and_cwd() {
         )
     );
 }
+
+#[test]
+fn only_dead_launches_lose_their_bus_sockets() {
+    let dir = tempfile::tempdir().unwrap();
+    let me = std::process::id();
+    let own = dir.path().join(proxy_socket_name("foo", me));
+    let alive = dir.path().join(proxy_socket_name("foo", me));
+    // No process has this pid (above the kernel's maximum).
+    let dead = dir.path().join(proxy_socket_name("foo", 4_194_305));
+    let other_app = dir.path().join(proxy_socket_name("foo-bar", 4_194_305));
+    for p in [&alive, &dead, &other_app] {
+        std::fs::write(p, b"").unwrap();
+    }
+    remove_stale_proxy_sockets(&own);
+    assert!(alive.exists(), "a running instance keeps its socket");
+    assert!(!dead.exists());
+    assert!(
+        other_app.exists(),
+        "another app's sockets are not ours to judge"
+    );
+    assert_eq!(
+        split_proxy_socket_name("appofholding-foo-bar-bus-12-ab"),
+        Some(("appofholding-foo-bar-bus", 12))
+    );
+    assert_eq!(split_proxy_socket_name("appofholding-foo-bus"), None);
+}

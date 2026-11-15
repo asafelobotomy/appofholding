@@ -103,8 +103,17 @@ impl Library {
                 appimage_path: dest.clone(),
                 desktop_file,
                 icon_file,
-                // Not every AppImage says its version; fall back to what the source told us.
-                version: ins.version.clone().or(version_hint.map(str::to_string)),
+                // The desktop file's X-AppImage-Version first, then the release tag that was
+                // installed, and only then the AppStream metadata `inspect` falls back to:
+                // upstreams often forget to bump its newest <release>.
+                version: ins
+                    .entry
+                    .main("X-AppImage-Version")
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .or(version_hint.map(str::trim).filter(|v| !v.is_empty()))
+                    .map(str::to_string)
+                    .or(ins.version.clone()),
                 sha256: sha256.clone(),
                 size,
                 appimage_type: ins.image.kind,
@@ -221,8 +230,10 @@ impl Library {
     /// defaults to the newest kept). The version you leave is kept too, so this is reversible,
     /// and the version you rolled back from is marked skipped so auto-update doesn't undo it.
     pub fn rollback(&self, id: &str, to: Option<&str>) -> Result<AppRecord> {
-        let app = self.get(id)?;
+        self.get(id)?; // a known app, so `id` is safe to name a lock file after
+        // The record is read under the lock, so an update finishing meanwhile is seen.
         let _lock = self.lock_app(id)?;
+        let app = self.get(id)?;
         let versions = self.db.list_versions(id)?;
         if versions.is_empty() {
             return Err(Error::Source(format!(

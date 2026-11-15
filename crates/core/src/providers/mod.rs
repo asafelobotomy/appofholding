@@ -291,18 +291,29 @@ fn plain_url(http: &dyn Http, url: &str) -> Result<Release> {
     if !(200..300).contains(&r.status) {
         return Err(Error::Http(format!("HTTP {} from {url}", r.status)));
     }
-    // Whatever the server offers to tell a changed file from an unchanged one.
+    // Whatever the server offers to tell a changed file from an unchanged one. When it offers
+    // nothing the tag stays empty, which `version::decide` reports as "can't tell", never as
+    // an update.
+    let nonempty = |s: &str| {
+        let s = s.trim();
+        (!s.is_empty()).then(|| s.to_string())
+    };
     let ident = r
         .header("etag")
-        .map(|e| e.trim_start_matches("W/").trim_matches('"').to_string())
-        .or_else(|| r.header("last-modified").map(str::to_string))
-        .or_else(|| r.header("content-length").map(|l| format!("size-{l}")))
+        .and_then(|e| nonempty(e.trim().trim_start_matches("W/").trim_matches('"')))
+        .or_else(|| r.header("last-modified").and_then(nonempty))
+        .or_else(|| {
+            r.header("content-length")
+                .and_then(nonempty)
+                .map(|l| format!("size-{l}"))
+        })
         .unwrap_or_default();
-    let file = url
-        .split('/')
-        .next_back()
-        .filter(|f| !f.is_empty())
-        .unwrap_or("download.AppImage");
+    // A plain link *is* the AppImage, whatever its URL looks like, so it is named after what
+    // the server calls it, else the URL's last path segment without query or fragment.
+    let file = r
+        .header("content-disposition")
+        .and_then(disposition_filename)
+        .unwrap_or_else(|| url_file_name(url));
     Ok(Release {
         tag: ident,
         name: None,
@@ -311,12 +322,98 @@ fn plain_url(http: &dyn Http, url: &str) -> Result<Release> {
         notes: None,
         opaque: true,
         assets: vec![Asset {
-            name: file.to_string(),
+            name: appimage_file_name(&file),
             url: url.to_string(),
-            size: r.header("content-length").and_then(|l| l.parse().ok()),
+            size: r
+                .header("content-length")
+                .and_then(|l| l.trim().parse().ok()),
             sha256: None,
         }],
     })
+}
+
+/// The last path segment of `url`, without query or fragment, percent-decoded; empty if the
+/// URL has no path.
+fn url_file_name(url: &str) -> String {
+    let no_query = url.split(['?', '#']).next().unwrap_or("");
+    let after_scheme = no_query.split_once("://").map_or(no_query, |x| x.1);
+    let path = after_scheme.split_once('/').map_or("", |x| x.1);
+    percent_decode(path.rsplit('/').next().unwrap_or(""))
+}
+
+/// The file name in a `Content-Disposition` header: `filename*=UTF-8''…` (RFC 6266) first, else
+/// `filename="…"`.
+fn disposition_filename(h: &str) -> Option<String> {
+    let params: Vec<(String, String)> = h
+        .split(';')
+        .filter_map(|p| {
+            let (k, v) = p.split_once('=')?;
+            Some((k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        })
+        .collect();
+    let get = |key: &str| {
+        params
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    let name = get("filename*")
+        .map(|v| {
+            let v = v.trim_matches('"');
+            // charset'language'value
+            let value = v.splitn(3, '\'').nth(2).unwrap_or(v);
+            percent_decode(value)
+        })
+        .or_else(|| get("filename").map(|v| v.trim_matches('"').to_string()))?;
+    // Never a path: only the last component counts.
+    let name = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(h) = s.get(i + 1..i + 3)
+            && let Ok(v) = u8::from_str_radix(h, 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A file name that is safe to install under: no path separators, control characters, `?`,
+/// `*` or leading dots, and ending in `.AppImage`.
+fn appimage_file_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | '?' | '*' | '"' | '<' | '>' | '|' | ':') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let clean = clean.trim().trim_start_matches('.').trim();
+    let stem = if clean.is_empty() { "download" } else { clean };
+    if stem.to_ascii_lowercase().ends_with(".appimage") {
+        stem.to_string()
+    } else {
+        format!("{stem}.AppImage")
+    }
 }
 
 /// Read a `.zsync` control file. Its text header names the real download URL, file name,
