@@ -227,7 +227,7 @@ ThemedPage {
                 Layout.fillWidth: true
                 Layout.maximumWidth: Kirigami.Units.gridUnit * 28
             }
-            QQC2.CheckBox {
+            Check {
                 id: purge
                 text: qsTr("Also delete the app's private data (cannot be undone)")
                 visible: page.d.sandbox && page.d.sandbox.level !== "none"

@@ -184,7 +184,7 @@ Kirigami.Dialog {
                     model: [qsTr("Smart (Downloads are moved, others stay)"), qsTr("Leave where they are"), qsTr("Copy into the library"), qsTr("Move into the library")]
                     onActivated: dialog.scan()
                 }
-                QQC2.CheckBox {
+                Check {
                     id: replaceBox
                     text: qsTr("Back up other tools' menu entries")
                     QQC2.ToolTip.visible: hovered
@@ -227,7 +227,7 @@ Kirigami.Dialog {
                         spacing: 0
                         RowLayout {
                             Layout.fillWidth: true
-                            QQC2.CheckBox {
+                            Check {
                                 enabled: modelData.action !== "skip"
                                 checked: !!dialog.selected[modelData.path]
                                 onToggled: dialog.setSelected(modelData.path, checked)

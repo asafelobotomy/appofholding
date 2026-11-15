@@ -239,7 +239,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 Kirigami.Icon { source: "folder"; Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium; Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium }
                 QQC2.Label { text: modelData.path; elide: Text.ElideMiddle; Layout.fillWidth: true }
-                QQC2.CheckBox {
+                Check {
                     text: qsTr("Can change files")
                     checked: modelData.write
                     onToggled: {
@@ -273,7 +273,7 @@ ColumnLayout {
         visible: sec.enabledSandbox
         title: qsTr("Compatibility")
         iconName: "tools-wizard"
-        QQC2.CheckBox {
+        Check {
             text: qsTr("Fix Chromium/Electron apps (adds --no-sandbox)")
             checked: !!sec.s.chromium
             onToggled: sec.change("chromium", checked)

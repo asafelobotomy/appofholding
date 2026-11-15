@@ -105,6 +105,8 @@ fn main() {
             .qml_files(
                 [
                     "qml/Main.qml",
+                    "qml/Radio.qml",
+                    "qml/Check.qml",
                     "qml/AppsPage.qml",
                     "qml/AppCard.qml",
                     "qml/AppPage.qml",

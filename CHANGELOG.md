@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Radio buttons and check boxes are easy to read in the Gruvbox themes: the selected choice
+  and ticked boxes are drawn in the theme's accent colour (they were a faint grey dot and tick).
+  With *Follow the system* they keep the desktop's own look.
+
 ## 0.8.0
 
 - **Update an app from a file you already have.** Dropping (or opening) an AppImage that is a

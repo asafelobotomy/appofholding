@@ -468,7 +468,7 @@ Kirigami.ApplicationWindow {
                 onTriggered: updateDialog.next()
             }
         ]
-        QQC2.CheckBox {
+        Check {
             id: keepOriginal
             text: qsTr("Keep the original file (install a copy)")
         }
@@ -541,16 +541,16 @@ Kirigami.ApplicationWindow {
                 visible: placeDialog.more
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
-                QQC2.RadioButton {
+                Radio {
                     id: moveChoice
                     checked: true
                     text: qsTr("Move it (recommended)")
                 }
-                QQC2.RadioButton {
+                Radio {
                     id: copyChoice
                     text: qsTr("Copy it and keep the original")
                 }
-                QQC2.RadioButton {
+                Radio {
                     id: keepChoice
                     text: qsTr("Leave it where it is")
                 }
@@ -563,7 +563,7 @@ Kirigami.ApplicationWindow {
                     font: Kirigami.Theme.smallFont
                     text: qsTr("It stays your file: removing the app from appOFholding leaves it in place. Moving or renaming it later breaks the menu entry.")
                 }
-                QQC2.CheckBox {
+                Check {
                     id: rememberChoice
                     Layout.topMargin: Kirigami.Units.smallSpacing
                     text: qsTr("Do this every time (change it in Settings)")

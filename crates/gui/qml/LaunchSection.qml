@@ -214,12 +214,12 @@ ColumnLayout {
     SectionCard {
         title: qsTr("Advanced")
         iconName: "preferences-other"
-        QQC2.CheckBox {
+        Check {
             id: extract
             text: qsTr("Unpack instead of mounting (no FUSE needed)")
             onToggled: sec.dirty = true
         }
-        QQC2.CheckBox {
+        Check {
             id: elevated
             text: qsTr("Run as administrator (root)")
             onToggled: sec.dirty = true
