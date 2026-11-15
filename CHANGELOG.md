@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - **Find an update source for AppImages that carry no update information.** appOFholding reads
   the hints inside the AppImage (electron-builder's `app-update.yml` and AppStream project links;
