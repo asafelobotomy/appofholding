@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - Radio buttons and check boxes are easy to read in the Gruvbox themes: the selected choice
   and ticked boxes are drawn in the theme's accent colour (they were a faint grey dot and tick).
