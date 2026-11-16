@@ -38,6 +38,12 @@ nothing else; the window of appOFholding does the same things through the same l
   detail, bytes, reversible}], would_refuse, reason}`.
 - `appofholding remove ID [--purge-data] --json`: `{version: 1, ok, id, name, kept_file,
   kept_data, purged_data}`.
+- `appofholding versions ID --json`: `{version: 1, ok, id, current: {version, sha256}, kept:
+  [{version, sha256, created_at, bytes}]}`, newest kept first. `rollback ID --to SHA --dry-run
+  --json` prints the plan uQ shows; `rollback ID --to SHA --json` answers `{version: 1, ok, id,
+  to}`. `--to` takes a version or a SHA-256 prefix; the page passes the first 12 characters.
+- `appofholding add LINK --json`: `{version: 1, ok, id, name, app_version, file, updates}`; the
+  page only passes a web link or `owner/repo`.
 - `appofholding config show --json`: `{version: 1, ok, settings: {policy, keep_versions,
   sandbox, schedule}, defaults, limits: {max_keep_versions}, apps_with_source}`; `config set
   KEY VALUE [--all] --json` and `config reset KEY --json` answer with the new `settings`, or

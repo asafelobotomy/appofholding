@@ -18,6 +18,21 @@ ColumnLayout {
     readonly property var status: Logic.statusOf(row.app)
     readonly property bool idle: !!row.host && !row.host.busy
 
+    /// The kept versions (Logic.versionsView) while the list is open, null when it is closed.
+    property var versions: null
+
+    function toggleVersions() {
+        if (row.versions !== null) {
+            row.versions = null;
+            return;
+        }
+        row.versions = { kept: [], problem: "" };
+        row.host.ctx.command.run("versions", [row.app.id], result => {
+            if (row.versions !== null)
+                row.versions = Logic.versionsView(result);
+        });
+    }
+
     spacing: 4
 
     RowLayout {
@@ -117,12 +132,59 @@ ColumnLayout {
                     onTriggered: row.host.stream("scan", "scan", [row.app.id], row.key)
                 }
                 QQC2.MenuItem {
+                    objectName: "versions-" + row.app.id
+                    text: "Earlier versions…"
+                    onTriggered: row.toggleVersions()
+                }
+                QQC2.MenuItem {
                     text: "Remove…"
                     onTriggered: row.host.write(row.key, "remove", [row.app.id], null, "section")
                 }
                 QQC2.MenuItem {
                     text: "Remove and delete its data…"
                     onTriggered: row.host.write(row.key, "remove-data", [row.app.id], null, "section")
+                }
+            }
+        }
+    }
+    ColumnLayout {
+        id: earlier
+        objectName: "earlier-" + row.app.id
+        visible: row.versions !== null
+        spacing: 4
+        Layout.leftMargin: 44
+        Layout.fillWidth: true
+
+        UqLabel {
+            text: row.versions !== null && row.versions.problem !== "" ? row.versions.problem
+                : "No earlier versions are kept."
+            visible: row.versions !== null && row.versions.kept.length === 0
+            wrapMode: Text.Wrap
+            opacity: 0.7
+            Layout.fillWidth: true
+        }
+        Repeater {
+            model: row.versions !== null ? row.versions.kept : []
+
+            RowLayout {
+                id: kept
+
+                required property var modelData
+
+                spacing: 12
+                Layout.fillWidth: true
+
+                UqLabel {
+                    text: kept.modelData.version + (kept.modelData.sizeText !== "" ? " \u00b7 " + kept.modelData.sizeText : "")
+                    Layout.fillWidth: true
+                }
+                QQC2.Button {
+                    text: "Go back"
+                    icon.name: "edit-undo"
+                    enabled: row.idle
+                    onClicked: row.host.write(row.key, "rollback", [kept.modelData.sha, row.app.id], () => {
+                        row.versions = null;
+                    })
                 }
             }
         }

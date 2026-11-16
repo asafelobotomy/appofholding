@@ -348,6 +348,62 @@ pub fn update_plan(lib: &Library, id: Option<&str>, force: bool) -> Result<Value
     Ok(plan(summary, changes, refuse))
 }
 
+/// The kept versions of `id` for rollback, newest first.
+pub fn versions_json(lib: &Library, id: &str) -> Result<Value> {
+    let app = lib.get(id)?;
+    let kept: Vec<Value> = lib
+        .versions(id)?
+        .into_iter()
+        .map(|v| {
+            json!({
+                "version": v.version,
+                "sha256": v.sha256,
+                "created_at": v.created_at,
+                "bytes": size_of(&v.path),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "version": 1,
+        "ok": true,
+        "id": id,
+        "current": { "version": app.version, "sha256": app.sha256 },
+        "kept": kept,
+    }))
+}
+
+/// What `rollback --to TO` would do: the version that comes back and the one that leaves.
+pub fn rollback_plan(lib: &Library, id: &str, to: Option<&str>) -> Result<Value> {
+    let app = lib.get(id)?;
+    let versions = lib.versions(id)?;
+    let target = match to {
+        None => versions.first(),
+        Some(t) => versions
+            .iter()
+            .find(|v| v.version.as_deref() == Some(t) || v.sha256.starts_with(t)),
+    };
+    let Some(target) = target else {
+        return Ok(plan(
+            "There is no earlier version to go back to.".to_string(),
+            Vec::new(),
+            Some("No kept version matches."),
+        ));
+    };
+    let from = app.version.as_deref().unwrap_or("?");
+    let back = target.version.as_deref().unwrap_or("?");
+    Ok(plan(
+        format!("{}: version {from} \u{2192} {back}", app.name),
+        vec![json!({
+            "group": "Version",
+            "label": app.name,
+            "detail": format!("{from} \u{2192} {back}; the version you leave is kept, and won't be installed again by itself"),
+            "bytes": size_of(&target.path),
+            "reversible": true,
+        })],
+        None,
+    ))
+}
+
 // ---- events
 
 /// One progress event on its own line. Stdout is line-buffered, so each reaches the reader as

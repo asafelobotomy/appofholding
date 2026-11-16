@@ -34,6 +34,10 @@ var CONFIG_KEYS = ["policy", "keep_versions", "sandbox", "schedule", "scan"];
 
 /// The argument patterns of page.toml's [[command]] tables: command id -> argument -> pattern.
 /// tests/uq/logic.test.mjs checks that they are the same strings.
+var SHA_PATTERN = "^[0-9a-f]{12,64}$";
+/// A web link or owner/repo, never a path.
+var LINK_PATTERN = "^(https?://[^\\x00-\\x20\\x7f]+|[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99})$";
+
 var PATTERNS = {
     "preview-remove": { "app": APP_PATTERN },
     "preview-remove-data": { "app": APP_PATTERN },
@@ -44,6 +48,10 @@ var PATTERNS = {
     "remove": { "app": APP_PATTERN },
     "remove-data": { "app": APP_PATTERN },
     "scan": { "app": APP_PATTERN },
+    "versions": { "app": APP_PATTERN },
+    "preview-rollback": { "to": SHA_PATTERN, "app": APP_PATTERN },
+    "rollback": { "to": SHA_PATTERN, "app": APP_PATTERN },
+    "add": { "link": LINK_PATTERN },
     "config-set": { "key": "^(" + CONFIG_KEYS.join("|") + ")$", "value": "^[a-z0-9]{1,16}$" },
     "config-policy-all": { "policy": "^(" + POLICY_KEYS.join("|") + ")$" }
 };
@@ -121,6 +129,42 @@ function removeOutcome(result) {
     else if (o.kept_data === true)
         text += " Its data was kept.";
     return { message: text, failed: false };
+}
+
+/// What going back said: {message, failed}.
+function rollbackOutcome(result) {
+    if (isCancelled(result))
+        return null;
+    const env = envelope(result);
+    if (!env.ok)
+        return { message: env.error, failed: true };
+    const to = env.output && typeof env.output.to === "string" ? cut(env.output.to, 60) : "";
+    return { message: "Went back" + (to !== "" ? " to " + to : "") + ". The version you left is kept, and won't be installed again by itself.", failed: false };
+}
+
+/// What adding from a link said: {message, failed}.
+function addOutcome(result) {
+    if (isCancelled(result))
+        return null;
+    const env = envelope(result);
+    if (!env.ok)
+        return { message: env.error, failed: true };
+    const o = env.output || {};
+    return { message: "Added " + cut(o.name || o.id || "the AppImage", NAME_LIMIT) + (typeof o.app_version === "string" ? " " + cut(o.app_version, 60) : "") + ".", failed: false };
+}
+
+/// `appofholding versions --json` as {kept: [{version, sha, sizeText}], problem}.
+function versionsView(result) {
+    const env = envelope(result);
+    if (!env.ok)
+        return { kept: [], problem: env.error };
+    const list = env.output && Array.isArray(env.output.kept) ? env.output.kept : [];
+    const kept = list.slice(0, 20).filter(v => v && typeof v.sha256 === "string" && new RegExp("^[0-9a-f]{64}$").test(v.sha256)).map(v => ({
+        version: typeof v.version === "string" && v.version !== "" ? cut(v.version, 60) : "unknown version",
+        sha: v.sha256.slice(0, 12),
+        sizeText: sizeText(v.bytes)
+    }));
+    return { kept: kept, problem: "" };
 }
 
 function withNote(notes, key, note) {

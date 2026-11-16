@@ -1319,3 +1319,84 @@ fn check_and_update_stream_ndjson() {
     assert_eq!(ev.last().unwrap()["failed"], 1);
     assert!(!o.status.success());
 }
+
+#[test]
+fn versions_and_rollback_speak_json_and_plan_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let write = |name: &str, ver: &str| {
+        let p = root.join(name);
+        fs::write(&p, fixture::versioned_appimage("Foo App", ver, None)).unwrap();
+        p
+    };
+    let v1 = write("Foo-1.0.0.AppImage", "1.0.0");
+    assert!(run(root, &["add", v1.to_str().unwrap()]).status.success());
+
+    // Nothing kept yet: an empty list, and a plan that refuses.
+    let v = json_of(&run(root, &["versions", "foo-app", "--json"]));
+    assert_eq!(v["current"]["version"], "1.0.0");
+    assert!(v["kept"].as_array().unwrap().is_empty());
+    let v = json_of(&run(root, &["rollback", "foo-app", "--dry-run", "--json"]));
+    assert_eq!(v["would_refuse"], true);
+
+    let v2 = write("Foo-2.0.0.AppImage", "2.0.0");
+    let o = run(root, &["update", "foo-app", "--from", v2.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", err(&o));
+
+    let v = json_of(&run(root, &["versions", "foo-app", "--json"]));
+    assert_eq!(v["current"]["version"], "2.0.0");
+    let kept = &v["kept"][0];
+    assert_eq!(kept["version"], "1.0.0");
+    let sha = kept["sha256"].as_str().unwrap().to_string();
+    assert!(kept["bytes"].as_u64().unwrap() > 0);
+
+    let v = json_of(&run(
+        root,
+        &[
+            "rollback",
+            "foo-app",
+            "--dry-run",
+            "--json",
+            "--to",
+            &sha[..12],
+        ],
+    ));
+    assert_eq!(v["would_refuse"], false);
+    assert!(v["summary"].as_str().unwrap().contains("2.0.0"), "{v}");
+    assert!(
+        stdout(&run(root, &["list"])).contains("2.0.0"),
+        "a dry run changes nothing"
+    );
+
+    let v = failed_json(&run(
+        root,
+        &["rollback", "foo-app", "--json", "--to", "ffffffff"],
+    ));
+    assert_eq!(v["ok"], false);
+
+    let v = json_of(&run(
+        root,
+        &["rollback", "foo-app", "--json", "--to", &sha[..12]],
+    ));
+    assert_eq!(v["to"], "1.0.0");
+    let v = json_of(&run(root, &["versions", "foo-app", "--json"]));
+    assert_eq!(v["current"]["version"], "1.0.0");
+}
+
+#[test]
+fn add_json_prints_only_the_answer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let img = root.join("Foo.AppImage");
+    fs::write(&img, fixture::simple_appimage("Foo App", None)).unwrap();
+    let v = json_of(&run(root, &["add", "--json", img.to_str().unwrap()]));
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["id"], "foo-app");
+    assert_eq!(v["name"], "Foo App");
+    // A link nobody answers fails inside the envelope.
+    let v = failed_json(&run(
+        root,
+        &["add", "--json", "http://127.0.0.1:9/X.AppImage"],
+    ));
+    assert_eq!(v["ok"], false);
+}

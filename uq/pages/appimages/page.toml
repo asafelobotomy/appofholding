@@ -46,6 +46,16 @@ id = "scan"
 label = "Scan AppImages with oysterAV"
 keywords = ["antivirus", "virus", "malware", "oysterav", "security", "threat"]
 
+[[setting]]
+id = "add"
+label = "Add an AppImage from a link"
+keywords = ["download", "github", "install", "new"]
+
+[[setting]]
+id = "rollback"
+label = "Go back to an earlier AppImage version"
+keywords = ["previous", "undo update", "old version", "revert"]
+
 [requires]
 bins = ["appofholding"]
 
@@ -84,6 +94,20 @@ argv = ["/usr/bin/appofholding", "remove", "--purge-data", "--dry-run", "--json"
 output = "json"
 timeout_ms = 30000
 args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+[[command]]
+id = "versions"
+argv = ["/usr/bin/appofholding", "versions", "--json"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+[[command]]
+id = "preview-rollback"
+argv = ["/usr/bin/appofholding", "rollback", "--dry-run", "--json", "--to"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "to", pattern = "^[0-9a-f]{12,64}$" }, { name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
 
 # ---- network: ask every update source now (results are also saved for `list`). Streamed: a
 # line as each app is checked. A source that fails is a line with `error`, not a failure.
@@ -164,6 +188,25 @@ timeout_ms = 60000
 args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
 confirm = "Remove %s and delete its settings and files? This can't be undone."
 preview = "preview-remove-data"
+
+# ---- going back to a kept version (the one you leave is kept too) and adding from a link.
+[[command]]
+id = "rollback"
+argv = ["/usr/bin/appofholding", "rollback", "--json", "--to"]
+output = "json"
+timeout_ms = 60000
+args = [{ name = "to", pattern = "^[0-9a-f]{12,64}$" }, { name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+confirm = "Go back to the earlier version you chose? The version you leave is kept."
+preview = "preview-rollback"
+
+# A web link or owner/repo, never a path; appofholding verifies the download's checksum.
+[[command]]
+id = "add"
+argv = ["/usr/bin/appofholding", "add", "--json"]
+output = "json"
+timeout_ms = 600000
+args = [{ name = "link", pattern = '^(https?://[^\x00-\x20\x7f]+|[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99})$' }]
+confirm = "Download %s and add it to your library?"
 
 # ---- the settings every app shares: `appofholding config` checks each value before it writes.
 [[command]]
