@@ -521,6 +521,16 @@ impl Library {
             )));
         }
 
+        // oysterAV looks before anything is replaced; in `block` mode a threat ends the update
+        // here, and the download is thrown away.
+        let verdict = match self.scan_before_install(&new_file, &new_sha) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = fs::remove_file(&new_file);
+                return Err(e);
+            }
+        };
+
         let hooks = self.db.list_hooks(id)?;
         let hook = |kind: &str| {
             hooks
@@ -550,6 +560,9 @@ impl Library {
             Some(&new_sha),
         )?;
         self.db.record_installed(id, Some(&tag), Some(&new_sha))?;
+        if let Some(v) = &verdict {
+            let _ = self.record_verdict(id, v);
+        }
         self.db
             .record_check(id, now(), Some(Status::UpToDate.as_str()), None, Some(&tag))?;
         self.db.set_notified(id, None)?;

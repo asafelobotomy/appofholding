@@ -14,6 +14,7 @@ use appofholding_core::defaults::MAX_KEEP_VERSIONS;
 use appofholding_core::engine::{self, DEFAULT_KEEP_VERSIONS};
 use appofholding_core::paths::stable_exec_path;
 use appofholding_core::sandbox::Level;
+use appofholding_core::scan::ScanMode;
 use appofholding_core::schedule::{self, Interval};
 use appofholding_core::source::Policy;
 use appofholding_core::{AppRecord, Dirs, FilePolicy, Library, SourceRecord};
@@ -21,19 +22,22 @@ use clap::Subcommand;
 use serde_json::{Value, json};
 
 /// The settings `config` shows and changes.
-pub const KEYS: [&str; 4] = ["policy", "keep_versions", "sandbox", "schedule"];
+pub const KEYS: [&str; 5] = ["policy", "keep_versions", "sandbox", "schedule", "scan"];
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
     /// Show every setting: the update policy new sources start with, how many previous versions
-    /// an update keeps, the sandbox new apps start in, and the background check schedule.
+    /// an update keeps, the sandbox new apps start in, the background check schedule, and whether
+    /// oysterAV scans AppImages.
     Show {
         /// Machine-readable output.
         #[arg(long)]
         json: bool,
     },
     /// Change one setting: policy (auto, notify, manual, pinned), keep_versions (0-10),
-    /// sandbox (none, standard, strict) or schedule (off, hourly, daily, weekly).
+    /// sandbox (none, standard, strict), schedule (off, hourly, daily, weekly) or scan (off, warn,
+    /// block: whether oysterAV scans an AppImage as it is added or updated, and whether a threat
+    /// stops it).
     Set {
         key: String,
         value: String,
@@ -86,6 +90,7 @@ fn settings_json(lib: &Library) -> Result<Value> {
         "keep_versions": d.keep_versions,
         "sandbox": d.sandbox.as_str(),
         "schedule": schedule_name(&lib.dirs),
+        "scan": lib.scan_mode()?.as_str(),
     }))
 }
 
@@ -99,6 +104,7 @@ pub fn show_json(lib: &Library) -> Result<Value> {
             "keep_versions": DEFAULT_KEEP_VERSIONS,
             "sandbox": Level::None.as_str(),
             "schedule": "off",
+            "scan": "off",
         },
         "limits": { "max_keep_versions": MAX_KEEP_VERSIONS },
         "apps_with_source": lib.sources()?.len(),
@@ -144,6 +150,11 @@ pub fn set(lib: &Library, exe: &Path, key: &str, value: &str, all: bool) -> Resu
             _ => bail!("sandbox must be none, standard or strict"),
         },
         "schedule" => set_schedule(&lib.dirs, exe, value)?,
+        "scan" => {
+            let mode =
+                ScanMode::parse(value).ok_or_else(|| anyhow!("scan must be off, warn or block"))?;
+            lib.set_scan_mode(mode)?;
+        }
         _ => bail!(
             "unknown setting '{key}'; the settings are {}",
             KEYS.join(", ")
@@ -164,6 +175,7 @@ pub fn reset(lib: &Library, exe: &Path, key: &str) -> Result<Value> {
         "keep_versions" => DEFAULT_KEEP_VERSIONS.to_string(),
         "sandbox" => Level::None.as_str().to_string(),
         "schedule" => "off".to_string(),
+        "scan" => "off".to_string(),
         _ => bail!(
             "unknown setting '{key}'; the settings are {}",
             KEYS.join(", ")

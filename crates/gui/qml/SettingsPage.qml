@@ -286,6 +286,30 @@ ThemedPage {
             }
 
             SectionCard {
+                title: qsTr("Antivirus")
+                iconName: "security-medium"
+                subtitle: qsTr("oysterAV only looks. A file it flags stays where it is; you decide in oysterAV what happens to it. Needs oysterAV installed.")
+                QQC2.ComboBox {
+                    id: defScan
+                    readonly property var keys: ["off", "warn", "block"]
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: Kirigami.Units.gridUnit * 20
+                    model: [qsTr("Off"), qsTr("Scan and warn me"), qsTr("Scan and stop a threat")]
+                    currentIndex: Math.max(0, keys.indexOf(page.defs.scan || "off"))
+                    onActivated: (i) => page.saveDefault("scan", keys[i])
+                    Accessible.name: qsTr("Scan AppImages with oysterAV")
+                }
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    text: defScan.currentIndex === 0 ? qsTr("AppImages are not scanned unless you ask.")
+                        : defScan.currentIndex === 1 ? qsTr("Each AppImage is scanned as it is added or updated, and the answer is kept. A threat is only reported.")
+                        : qsTr("As “Scan and warn me”, but an AppImage with a threat is not added or installed, and an update with one is thrown away.")
+                }
+            }
+
+            SectionCard {
                 title: qsTr("Sandbox")
                 iconName: "security-high"
                 subtitle: qsTr("For apps you add from now on. Apps already added keep their own sandbox.")

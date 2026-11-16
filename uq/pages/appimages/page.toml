@@ -9,7 +9,7 @@ name = "AppImages"
 icon = "io.github.appofholding"
 category = "apps"
 qml = "Page.qml"
-keywords = ["appimage", "appofholding", "updates", "apps", "sandbox", "library"]
+keywords = ["appimage", "appofholding", "updates", "apps", "sandbox", "library", "antivirus", "oysterav", "scan"]
 
 [[setting]]
 id = "updates"
@@ -40,6 +40,11 @@ keywords = ["rollback", "going back", "old versions"]
 id = "sandbox"
 label = "Sandbox for new AppImages"
 keywords = ["bubblewrap", "isolation", "standard", "strict"]
+
+[[setting]]
+id = "scan"
+label = "Scan AppImages with oysterAV"
+keywords = ["antivirus", "virus", "malware", "oysterav", "security", "threat"]
 
 [requires]
 bins = ["appofholding"]
@@ -105,6 +110,20 @@ output = "ndjson"
 timeout_ms = 600000
 args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
 
+# ---- oysterAV. Streamed: a line as each app is scanned. It only looks: nothing is moved or deleted.
+[[command]]
+id = "scan-all"
+argv = ["/usr/bin/appofholding", "scan", "--all", "--ndjson"]
+output = "ndjson"
+timeout_ms = 600000
+
+[[command]]
+id = "scan"
+argv = ["/usr/bin/appofholding", "scan", "--ndjson"]
+output = "ndjson"
+timeout_ms = 600000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
 # ---- per-app settings
 [[command]]
 id = "policy"
@@ -152,7 +171,7 @@ id = "config-set"
 argv = ["/usr/bin/appofholding", "config", "set", "--json"]
 output = "json"
 timeout_ms = 30000
-args = [{ name = "key", pattern = "^(policy|keep_versions|sandbox|schedule)$" }, { name = "value", pattern = "^[a-z0-9]{1,16}$" }]
+args = [{ name = "key", pattern = "^(policy|keep_versions|sandbox|schedule|scan)$" }, { name = "value", pattern = "^[a-z0-9]{1,16}$" }]
 
 [[command]]
 id = "config-policy-all"

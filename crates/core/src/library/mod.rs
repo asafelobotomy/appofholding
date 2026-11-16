@@ -162,6 +162,9 @@ impl Library {
         }
 
         let (sha256, size) = image::hash_file(&source)?;
+        // oysterAV looks first (when asked to); in `block` mode a threat ends it here, before
+        // anything is created.
+        let verdict = self.scan_before_install(&source, &sha256)?;
         let mut created: Vec<PathBuf> = Vec::new();
         let result = self.add_inner(
             &ins,
@@ -190,6 +193,9 @@ impl Library {
             && let Some(Ok(p)) = rec.update_info.as_deref().map(crate::source::parse_input)
         {
             let _ = self.db.upsert_source(&rec.id, &p.source);
+        }
+        if let (Ok(rec), Some(v)) = (&result, &verdict) {
+            let _ = self.record_verdict(&rec.id, v);
         }
         // Start it in the default sandbox, if one is chosen. Not fatal: the app is added.
         if let Ok(rec) = &result {

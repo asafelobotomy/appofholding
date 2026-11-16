@@ -27,5 +27,11 @@ QQC2.ToolButton {
             enabled: btn.app.hasSource && !btn.busy
             onTriggered: applicationWindow().backendObject.start("check", btn.app.id, "", "", "")
         }
+        QQC2.MenuItem {
+            text: qsTr("Scan with oysterAV")
+            icon.name: "security-medium"
+            enabled: !btn.busy
+            onTriggered: applicationWindow().backendObject.start("scan", btn.app.id, "", "", "")
+        }
     }
 }

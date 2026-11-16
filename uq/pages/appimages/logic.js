@@ -16,13 +16,21 @@ var SANDBOX_HELP = [
     "New apps can't see your files, and have no network or sound."
 ];
 
+var SCAN_KEYS = ["off", "warn", "block"];
+var SCAN_NAMES = ["Off", "Scan and warn me", "Scan and stop a threat"];
+var SCAN_HELP = [
+    "AppImages are not scanned unless you ask.",
+    "Each AppImage is scanned as it is added or updated, and the answer is kept. A threat is only reported.",
+    "As “Scan and warn me”, but an AppImage with a threat is not added or installed, and an update with one is thrown away."
+];
+
 var APP_LIMIT = 500;
 var NAME_LIMIT = 200;
 var MESSAGE_LIMIT = 400;
 var RESULT_LIMIT = 200;
 
 var APP_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$";
-var CONFIG_KEYS = ["policy", "keep_versions", "sandbox", "schedule"];
+var CONFIG_KEYS = ["policy", "keep_versions", "sandbox", "schedule", "scan"];
 
 /// The argument patterns of page.toml's [[command]] tables: command id -> argument -> pattern.
 /// tests/uq/logic.test.mjs checks that they are the same strings.
@@ -35,6 +43,7 @@ var PATTERNS = {
     "unskip": { "app": APP_PATTERN },
     "remove": { "app": APP_PATTERN },
     "remove-data": { "app": APP_PATTERN },
+    "scan": { "app": APP_PATTERN },
     "config-set": { "key": "^(" + CONFIG_KEYS.join("|") + ")$", "value": "^[a-z0-9]{1,16}$" },
     "config-policy-all": { "policy": "^(" + POLICY_KEYS.join("|") + ")$" }
 };
@@ -125,6 +134,29 @@ function withNote(notes, key, note) {
 
 // ---- the library
 
+/// What oysterAV last said about an app: {state, detail}, or null when it never did.
+function scanOf(s) {
+    if (!s || typeof s !== "object" || ["clean", "threat", "error"].indexOf(s.state) < 0)
+        return null;
+    return { state: s.state, detail: typeof s.detail === "string" ? cut(s.detail, MESSAGE_LIMIT) : "" };
+}
+
+/// The words for it ("" when the app was never scanned).
+function scanText(app) {
+    if (!app.scan)
+        return "";
+    if (app.scan.state === "clean")
+        return "oysterAV found no threats.";
+    if (app.scan.state === "threat")
+        return "oysterAV found " + (app.scan.detail !== "" ? app.scan.detail : "a threat") + ". Don't run it; oysterAV can move it away.";
+    return "oysterAV couldn't scan it" + (app.scan.detail !== "" ? ": " + app.scan.detail : ".");
+}
+
+/// How many apps oysterAV found a threat in.
+function threatCount(apps) {
+    return apps.filter(a => a.scan && a.scan.state === "threat").length;
+}
+
 /// `appofholding list --json` as {apps, updates, problem}. `problem` is "" when it read.
 function libraryView(result) {
     const none = { apps: [], updates: 0, problem: "" };
@@ -147,7 +179,8 @@ function libraryView(result) {
         latest: typeof a.latest === "string" ? cut(a.latest, 60) : "",
         skipped: typeof a.skipped === "string" ? cut(a.skipped, 60) : "",
         error: typeof a.error === "string" ? cut(a.error, MESSAGE_LIMIT) : "",
-        update: a.update === true
+        update: a.update === true,
+        scan: scanOf(a.scan)
     }));
     return { apps: apps, updates: apps.filter(a => a.update).length, problem: "" };
 }
@@ -278,6 +311,22 @@ function reduce(state, ev) {
             });
         }
         break;
+    case "scanned":
+        if (typeof ev.total === "number")
+            next.total = ev.total;
+        if (typeof ev.index === "number")
+            next.index = ev.index;
+        next.name = cut(ev.name || ev.id || "", NAME_LIMIT);
+        if (next.results.length < RESULT_LIMIT && (ev.state === "threat" || ev.state === "error")) {
+            const name = cut(ev.name || ev.id || "", NAME_LIMIT);
+            next.results.push({
+                app: String(ev.id || ""),
+                name: name,
+                outcome: "failed",
+                text: ev.state === "threat" ? name + ": oysterAV found " + cut(ev.detail || "a threat", MESSAGE_LIMIT) : name + ": couldn't be scanned (" + cut(ev.detail || "unknown reason", MESSAGE_LIMIT) + ")"
+            });
+        }
+        break;
     case "result":
         if (next.results.length < RESULT_LIMIT)
             next.results.push({ app: String(ev.app || ""), name: cut(ev.name || ev.app || "", NAME_LIMIT), outcome: String(ev.outcome || ""), text: resultText(ev) });
@@ -292,6 +341,14 @@ function reduce(state, ev) {
 }
 
 function doneSummary(kind, ev) {
+    if (kind === "scan") {
+        const threats = typeof ev.threats === "number" ? ev.threats : 0;
+        const errors = typeof ev.errors === "number" ? ev.errors : 0;
+        const parts = [threats === 0 ? "No threats found" : plural(threats, "threat", "threats") + " found"];
+        if (errors > 0)
+            parts.push(plural(errors, "couldn't be scanned", "couldn't be scanned"));
+        return parts.join(", ") + ".";
+    }
     if (kind === "check") {
         const n = typeof ev.updates === "number" ? ev.updates : 0;
         return n === 0 ? "No updates found." : plural(n, "update", "updates") + " found.";
@@ -310,7 +367,7 @@ function doneSummary(kind, ev) {
 function fraction(state) {
     if (state.total <= 0)
         return -1;
-    if (state.kind === "check")
+    if (state.kind === "check" || state.kind === "scan")
         return Math.min(1, Math.max(0, state.index / state.total));
     const base = Math.max(0, state.index - 1) / state.total;
     const part = state.percent >= 0 ? state.percent / 100 / state.total : 0;
@@ -320,7 +377,9 @@ function fraction(state) {
 function progressLine(state) {
     if (state.done)
         return state.summary;
-    const verb = state.kind === "check" ? "Checking " : (state.percent >= 0 ? "Downloading " : "Updating ");
+    if (state.kind === "scan" && (state.total <= 0 || state.name === ""))
+        return "Asking oysterAV…";
+    const verb = state.kind === "scan" ? "Scanned " : state.kind === "check" ? "Checking " : (state.percent >= 0 ? "Downloading " : "Updating ");
     if (state.total <= 0 || state.name === "")
         return state.kind === "check" ? "Asking update sources…" : "Starting…";
     const where = state.total > 1 ? " (" + Math.max(1, state.index) + " of " + state.total + ")" : "";
@@ -358,7 +417,8 @@ function configView(result) {
             policy: POLICY_KEYS.indexOf(s.policy) >= 0 ? s.policy : "notify",
             keep_versions: keep,
             sandbox: SANDBOX_KEYS.indexOf(s.sandbox) >= 0 ? s.sandbox : "none",
-            schedule: SCHEDULE_KEYS.indexOf(s.schedule) >= 0 ? s.schedule : "off"
+            schedule: SCHEDULE_KEYS.indexOf(s.schedule) >= 0 ? s.schedule : "off",
+            scan: SCAN_KEYS.indexOf(s.scan) >= 0 ? s.scan : "off"
         },
         maxKeep: out.limits && typeof out.limits.max_keep_versions === "number" ? out.limits.max_keep_versions : 10,
         withSource: typeof out.apps_with_source === "number" ? out.apps_with_source : 0,

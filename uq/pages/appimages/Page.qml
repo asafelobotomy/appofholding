@@ -169,12 +169,26 @@ SettingsPage {
                     onClicked: page.stream("check", "check", [], "all")
                 }
                 QQC2.Button {
+                    objectName: "scan-all"
+                    text: "Scan with oysterAV"
+                    icon.name: "security-medium"
+                    enabled: !page.busy && page.library !== null && page.library.problem === "" && page.library.apps.length > 0
+                    onClicked: page.stream("scan", "scan-all", [], "all")
+                }
+                QQC2.Button {
                     objectName: "update-all"
                     text: "Update all"
                     icon.name: "system-software-update"
                     enabled: !page.busy && page.library !== null && page.library.updates > 0
                     onClicked: page.stream("update", "update-all", [], "all")
                 }
+            }
+            ErrorCard {
+                objectName: "scan-threats"
+                title: page.library !== null ? "oysterAV found a threat in " + Logic.plural(Logic.threatCount(page.library.apps), "AppImage", "AppImages") : ""
+                detail: "Don't run them. They are marked in Your AppImages, and oysterAV can move them away."
+                visible: page.library !== null && page.library.problem === "" && Logic.threatCount(page.library.apps) > 0
+                Layout.fillWidth: true
             }
             ErrorCard {
                 title: "Couldn't read your AppImages"

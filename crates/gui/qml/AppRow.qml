@@ -85,6 +85,17 @@ Rectangle {
             elide: Text.ElideRight
             Layout.fillWidth: true
         }
+        // oysterAV found something: said before anything else, in every width.
+        Pill {
+            visible: !row.busy && !!row.app.scan && row.app.scan.state === "threat"
+            text: qsTr("Threat")
+            iconName: "dialog-warning"
+            tone: "negative"
+            Accessible.name: qsTr("oysterAV found %1").arg(row.app.scan ? row.app.scan.detail : "")
+            HoverHandler { id: threatHover }
+            QQC2.ToolTip.visible: threatHover.hovered
+            QQC2.ToolTip.text: qsTr("oysterAV found %1").arg(row.app.scan ? row.app.scan.detail : "")
+        }
         // What matters, in a few words.
         Text {
             visible: !row.narrow && !row.busy && (row.hasUpdate || row.hasProblem)
