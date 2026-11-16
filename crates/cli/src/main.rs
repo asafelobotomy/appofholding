@@ -62,6 +62,9 @@ enum Cmd {
         /// Shell command to run once after adding (also kept as the app's post-install hook).
         #[arg(long)]
         post_install: Option<String>,
+        /// Machine-readable output: one object at the end, nothing else on stdout.
+        #[arg(long)]
+        json: bool,
     },
     /// Have oysterAV scan the AppImages in the library, and keep what it says.
     Scan(scancmd::ScanArgs),
@@ -152,13 +155,24 @@ enum Cmd {
         ndjson: bool,
     },
     /// List the previous versions kept for rollback.
-    Versions { id: String },
+    Versions {
+        id: String,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Go back to a kept version (the newest one unless --to is given).
     Rollback {
         id: String,
         /// Version string or SHA-256 prefix, as shown by `versions`.
         #[arg(long)]
         to: Option<String>,
+        /// Only show what going back would change.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable output: the plan with --dry-run, otherwise what was done.
+        #[arg(long)]
+        json: bool,
     },
     /// Set what happens when an update is found: auto, notify, manual or pinned.
     Policy { id: String, policy: String },
@@ -1521,6 +1535,50 @@ fn update_ndjson(
     Ok(())
 }
 
+/// `add --json`: the same steps as `add`, but nothing on stdout except the answer.
+fn add_json(
+    target: String,
+    asset: Option<String>,
+    channel: Option<String>,
+    move_file: bool,
+    id: Option<String>,
+    post_install: Option<String>,
+) -> Result<serde_json::Value> {
+    let opts = AddOptions {
+        install: if move_file {
+            Install::Move
+        } else {
+            Install::Copy
+        },
+        id,
+    };
+    let lib = library()?;
+    let path = PathBuf::from(&target);
+    if path.is_file() && (asset.is_some() || channel.is_some()) {
+        bail!("--asset and --channel only apply when adding from a link");
+    }
+    let rec = if path.is_file() {
+        lib.add(&path, &opts)?
+    } else {
+        let parsed = build_source(&target, asset, channel)?;
+        lib.install_from_source(&UreqHttp::new(), parsed, &opts, &mut |_, _| {})?
+            .0
+    };
+    if let Some(cmd) = post_install {
+        lib.set_hook(&rec.id, "post-install", &cmd)?;
+        lib.run_hook(&rec.id, "post-install")?;
+    }
+    Ok(json!({
+        "version": 1,
+        "ok": true,
+        "id": rec.id,
+        "name": rec.name,
+        "app_version": rec.version,
+        "file": rec.appimage_path.display().to_string(),
+        "updates": lib.source(&rec.id)?.map(|s| s.source.describe()),
+    }))
+}
+
 fn config_cmd(cmd: ConfigCmd) -> Result<()> {
     let json = cmd.json();
     let exe = std::env::current_exe().context("cannot determine own path")?;
@@ -1893,7 +1951,19 @@ fn main() -> Result<()> {
             move_file,
             id,
             post_install,
+            json,
         } => {
+            if json {
+                json_or_exit(add_json(
+                    target,
+                    asset,
+                    channel,
+                    move_file,
+                    id,
+                    post_install,
+                ));
+                return Ok(());
+            }
             let opts = AddOptions {
                 install: if move_file {
                     Install::Move
@@ -2436,7 +2506,10 @@ fn main() -> Result<()> {
                 bail!("some updates failed");
             }
         }
-        Cmd::Versions { id } => {
+        Cmd::Versions { id, json: true } => {
+            json_or_exit(library().and_then(|lib| pagejson::versions_json(&lib, &id)))
+        }
+        Cmd::Versions { id, json: false } => {
             let lib = library()?;
             let app = lib.get(&id)?;
             println!(
@@ -2452,7 +2525,34 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Rollback { id, to } => {
+        Cmd::Rollback {
+            id,
+            to,
+            dry_run: true,
+            json,
+        } => {
+            let plan = library().and_then(|lib| pagejson::rollback_plan(&lib, &id, to.as_deref()));
+            if json {
+                json_or_exit(plan);
+            } else {
+                println!("{}", plan?["summary"].as_str().unwrap_or(""));
+            }
+        }
+        Cmd::Rollback {
+            id,
+            to,
+            dry_run: false,
+            json: true,
+        } => json_or_exit(library().and_then(|lib| {
+            let rec = lib.rollback(&id, to.as_deref())?;
+            Ok(json!({ "version": 1, "ok": true, "id": id, "to": rec.version }))
+        })),
+        Cmd::Rollback {
+            id,
+            to,
+            dry_run: false,
+            json: false,
+        } => {
             let rec = library()?.rollback(&id, to.as_deref())?;
             println!(
                 "{id} is now version {}",

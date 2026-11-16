@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **The AppImages page in uQ Settings can now go back and add.** *Apps* has an **Add an
+  AppImage from a link** row (a web link or `owner/repo`, never a path; it asks first), and each
+  app's **More** menu has **Earlier versions…**, which lists the versions kept for rollback with
+  a **Go back** button that shows what it would change before it does.
+- `appofholding versions ID --json`, `rollback ID --dry-run --json` (the plan uQ shows),
+  `rollback ID --json` and `add TARGET --json` (nothing on stdout but the answer) for programs.
+
 ## 0.10.0
 
 - **Scan AppImages with oysterAV.** With [oysterAV](https://github.com/asafelobotomy/oysterAV)

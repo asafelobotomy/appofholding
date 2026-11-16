@@ -77,7 +77,7 @@ test("argument patterns are the same in logic.js and page.toml", () => {
     }
     assert.equal((c.args ?? []).length, Object.keys(L.PATTERNS[c.id] ?? {}).length, `${c.id}: argument count`);
   }
-  assert.equal(seen, 13);
+  assert.equal(seen, 19);
 });
 
 const HOSTILE = ["-rf", "--purge-data", "a\nb", "", "x".repeat(200), "../x", "$(id)", "-", "a b", "A\u0000"];
@@ -87,7 +87,7 @@ test("hostile arguments are refused by logic.js exactly as uQ would", () => {
     const names = Object.keys(args);
     for (const [i, name] of names.entries()) {
       for (const bad of HOSTILE) {
-        const given = names.map((n, j) => (j === i ? bad : n === "policy" ? "auto" : n === "key" ? "policy" : n === "value" ? "auto" : "krita"));
+        const given = names.map((n, j) => (j === i ? bad : n === "policy" ? "auto" : n === "key" ? "policy" : n === "value" ? "auto" : n === "to" ? "0123456789ab" : n === "link" ? "owner/repo" : "krita"));
         assert.equal(L.argsProblem(id, given) === "", uqAccepts(args[name], bad), `${id}.${name} ${JSON.stringify(bad.slice(0, 12))}`);
       }
     }
@@ -251,6 +251,26 @@ test("configView reads the settings and clamps what it can't trust", () => {
   assert.equal(L.configView({ error: "Cancelled", cancelled: true }), null);
   assert.equal(L.indexOfKey(L.POLICY_KEYS, "manual", 1), 2);
   assert.equal(L.indexOfKey(L.POLICY_KEYS, "zzz", 1), 1);
+});
+
+test("add takes a link or owner/repo, never a path; rollback takes a hash", () => {
+  for (const ok of ["owner/repo", "https://github.com/o/r", "http://example.com/a/b.AppImage?x=1"]) assert.equal(L.argsProblem("add", [ok]), "", ok);
+  for (const bad of ["/etc/passwd", "./x", "../x", "~/x", "file:///x", "a b", "owner/repo/extra", "https://x/ y"]) assert.notEqual(L.argsProblem("add", [bad]), "", bad);
+  assert.equal(L.argsProblem("rollback", ["0123456789ab", "krita"]), "");
+  assert.notEqual(L.argsProblem("rollback", ["1.0.0", "krita"]), "");
+  assert.notEqual(L.argsProblem("rollback", ["krita", "0123456789ab"]), "");
+});
+
+test("versions, going back and adding are worded plainly", () => {
+  const sha = "0123456789abcdef".repeat(4);
+  const v = L.versionsView({ code: 0, output: { version: 1, ok: true, kept: [{ version: "1.0", sha256: sha, bytes: 2500000 }, { version: null, sha256: sha, bytes: 0 }, { sha256: "zz" }, null] } });
+  assert.deepEqual(v.kept, [{ version: "1.0", sha: sha.slice(0, 12), sizeText: "2.5 MB" }, { version: "unknown version", sha: sha.slice(0, 12), sizeText: "" }]);
+  assert.equal(L.versionsView({ error: "boom" }).problem, "boom");
+  assert.equal(L.rollbackOutcome({ code: 0, output: { ok: true, to: "1.0" } }).message, "Went back to 1.0. The version you left is kept, and won't be installed again by itself.");
+  assert.equal(L.rollbackOutcome({ error: "Cancelled", cancelled: true }), null);
+  assert.equal(L.rollbackOutcome({ code: 1, error: "exit 1", output: { ok: false, error: "no kept version" } }).failed, true);
+  assert.equal(L.addOutcome({ code: 0, output: { ok: true, name: "Krita", app_version: "5.2" } }).message, "Added Krita 5.2.");
+  assert.equal(L.addOutcome({ code: 1, error: "exit 1", output: { ok: false, error: "network error" } }).message, "network error");
 });
 
 test("choice lists line up with their keys", () => {

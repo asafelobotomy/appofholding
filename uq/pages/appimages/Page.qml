@@ -86,6 +86,8 @@ SettingsPage {
             if (Logic.isCancelled(result))
                 return;
             const note = command.indexOf("remove") === 0 ? Logic.removeOutcome(result)
+                : command === "rollback" ? Logic.rollbackOutcome(result)
+                : command === "add" ? Logic.addOutcome(result)
                 : command.indexOf("config") === 0 ? page.configNote(result)
                 : Logic.textOutcome(result);
             page.notes = Logic.withNote(page.notes, key, note);
@@ -244,7 +246,7 @@ SettingsPage {
         SettingsCard {
             title: "Your AppImages"
             iconName: "applications-all"
-            help: "Remove shows everything it would remove before it removes anything. Adding and importing AppImages is done in appOFholding."
+            help: "Remove and going back show what they would change before they change anything. Importing AppImages you already have is done in appOFholding."
             wide: true
             Layout.fillWidth: true
             actions: [
@@ -261,8 +263,39 @@ SettingsPage {
                 highlight: page.highlight
                 Layout.fillWidth: true
             }
+            SettingRow {
+                settingId: "add"
+                label: "Add an AppImage from a link"
+                highlight: page.highlight
+                Layout.fillWidth: true
+
+                QQC2.TextField {
+                    id: link
+                    objectName: "add-link"
+                    placeholderText: "GitHub link or owner/repo"
+                    implicitWidth: 260
+                    enabled: !page.busy
+                    onAccepted: addButton.clicked()
+                }
+                QQC2.Button {
+                    id: addButton
+                    objectName: "add-button"
+                    text: "Add"
+                    icon.name: "list-add"
+                    enabled: !page.busy && link.text.trim() !== ""
+                    onClicked: page.write("add", "add", [link.text.trim()], result => {
+                        if (Logic.envelope(result).ok)
+                            link.text = "";
+                    })
+                }
+            }
+            Outcome {
+                host: page
+                noteKey: "add"
+                Layout.fillWidth: true
+            }
             UqLabel {
-                text: "Nothing here yet. Add an AppImage in appOFholding and it shows up here."
+                text: "Nothing here yet. Add an AppImage from a link above, or import the ones you have in appOFholding."
                 visible: page.library !== null && page.library.problem === "" && page.library.apps.length === 0
                 opacity: 0.7
                 wrapMode: Text.Wrap

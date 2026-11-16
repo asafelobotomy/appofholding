@@ -41,6 +41,9 @@ Item {
             unskip: { code: 0, output: "krita: no longer skipping any version" },
             remove: { code: 0, output: { version: 1, ok: true, id: "tool", name: "Tool", kept_file: null, kept_data: true, purged_data: false } },
             "remove-data": { code: 0, output: { version: 1, ok: true, id: "tool", name: "Tool", kept_file: null, kept_data: false, purged_data: true } },
+            versions: { code: 0, output: { version: 1, ok: true, id: "krita", current: { version: "5.2.3", sha256: "f".repeat(64) }, kept: [{ version: "5.2.0", sha256: "0123456789abcdef".repeat(4), bytes: 250000000 }] } },
+            rollback: { code: 0, output: { version: 1, ok: true, id: "krita", to: "5.2.0" } },
+            add: { code: 0, output: { version: 1, ok: true, id: "foo", name: "Foo", app_version: "1.0", file: "/x", updates: null } },
             "config-set": { code: 0, output: { version: 1, ok: true, key: "keep_versions", settings: root.config.settings, changed_apps: 0 } },
             "config-policy-all": { code: 0, output: { version: 1, ok: true, key: "policy", settings: root.config.settings, changed_apps: 3 } }
         })
@@ -74,7 +77,7 @@ Item {
                 ]
             })
         // Commands that have `confirm` in page.toml.
-        confirmed: ["update-all", "remove", "remove-data", "config-policy-all"]
+        confirmed: ["update-all", "remove", "remove-data", "config-policy-all", "rollback", "add"]
     }
 
     Loader {
@@ -323,6 +326,43 @@ Item {
             tryVerify(() => ran("config-policy-all").length === 1);
             compare(ran("config-policy-all")[0], ["run", "config-policy-all", ["notify"]]);
             hasText("Changed 3 apps.");
+        }
+
+        function test_adding_from_a_link_asks_runs_and_clears_the_field() {
+            openTab("Apps");
+            tryVerify(() => root.find(loader.item, i => i.objectName === "add-link") !== null);
+            const field = root.find(loader.item, i => i.objectName === "add-link");
+            const add = root.find(loader.item, i => i.objectName === "add-button");
+            verify(!add.enabled, "nothing to add yet");
+            field.text = "owner/repo";
+            tryVerify(() => add.enabled);
+            add.clicked();
+            tryVerify(() => ran("add").length === 1);
+            compare(ran("add")[0], ["run", "add", ["owner/repo"]]);
+            hasText("Added Foo 1.0.");
+            tryVerify(() => field.text === "");
+        }
+
+        function test_a_path_is_never_added() {
+            hasText("1 update for 4 AppImages");
+            loader.item.write("add", "add", ["/etc/passwd"]);
+            wait(50);
+            compare(ran("add").length, 0);
+            compare(loader.item.noteFor("add").failed, true);
+        }
+
+        function test_earlier_versions_list_and_go_back() {
+            openTab("Apps");
+            tryVerify(() => root.find(loader.item, i => i.hasOwnProperty("toggleVersions") && i.visible && i.app && i.app.id === "krita") !== null);
+            // the menu item's action
+            root.find(loader.item, i => i.hasOwnProperty("toggleVersions") && i.visible && i.app && i.app.id === "krita").toggleVersions();
+            hasText("5.2.0 \u00b7 250.0 MB");
+            const back = root.find(loader.item, i => i.text === "Go back" && i.visible);
+            verify(back !== null);
+            back.clicked();
+            tryVerify(() => ran("rollback").length === 1);
+            compare(ran("rollback")[0], ["run", "rollback", ["0123456789ab", "krita"]]);
+            hasText("Went back to 5.2.0. The version you left is kept, and won't be installed again by itself.");
         }
 
         function test_unreadable_library_says_so() {
