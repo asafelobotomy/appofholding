@@ -73,6 +73,20 @@ appofholding defaults set --keep-versions 3 --sandbox standard
 An `[[app]]` entry without `policy` uses the library's default when `apply` creates its source.
 These settings are not part of `export`.
 
+`appofholding config` is the same list in one place, and adds the background check schedule:
+
+```sh
+appofholding config show                       # policy, keep_versions, sandbox, schedule
+appofholding config set keep_versions 3
+appofholding config set schedule weekly        # off, hourly, daily or weekly
+appofholding config set policy auto --all      # also give every existing app this policy
+appofholding config reset sandbox              # back to the built-in value
+```
+
+Every value is checked before anything is written, and `--json` prints
+`{"version": 1, "ok": true, "settings": {...}}`, or `{"version": 1, "ok": false, "error": "..."}`
+with exit status 1.
+
 ## Updating appOFholding itself
 
 `appofholding self check` compares the running version with the newest GitHub release, and the

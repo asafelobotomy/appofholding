@@ -1089,3 +1089,233 @@ fn a_downloaded_newer_version_updates_the_app_from_the_file() {
     assert!(v2.exists(), "--copy leaves the file");
     assert!(stdout(&run(root, &["versions", "foo-app"])).contains("1.0.0"));
 }
+
+fn failed_json(o: &Output) -> serde_json::Value {
+    assert!(!o.status.success(), "{}", stdout(o));
+    serde_json::from_slice(&o.stdout).unwrap_or_else(|e| panic!("{e}: {}", stdout(o)))
+}
+
+fn lines_of(o: &Output) -> Vec<serde_json::Value> {
+    stdout(o)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}")))
+        .collect()
+}
+
+#[test]
+fn config_shows_sets_and_resets_every_setting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["settings"]["policy"], "notify");
+    assert_eq!(v["settings"]["keep_versions"], 2);
+    assert_eq!(v["settings"]["sandbox"], "none");
+    assert_eq!(v["settings"]["schedule"], "off");
+    assert_eq!(v["limits"]["max_keep_versions"], 10);
+
+    let v = json_of(&run(root, &["config", "set", "policy", "auto", "--json"]));
+    assert_eq!(v["settings"]["policy"], "auto");
+    json_of(&run(
+        root,
+        &["config", "set", "keep_versions", "4", "--json"],
+    ));
+    json_of(&run(
+        root,
+        &["config", "set", "sandbox", "standard", "--json"],
+    ));
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["settings"]["keep_versions"], 4);
+    assert_eq!(v["settings"]["sandbox"], "standard");
+    // The older command reads the same values.
+    let v = json_of(&run(root, &["defaults", "show", "--json"]));
+    assert_eq!(v["policy"], "auto");
+
+    json_of(&run(
+        root,
+        &["config", "set", "schedule", "weekly", "--json"],
+    ));
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["settings"]["schedule"], "weekly");
+    json_of(&run(root, &["config", "reset", "schedule", "--json"]));
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["settings"]["schedule"], "off");
+
+    json_of(&run(root, &["config", "reset", "keep_versions", "--json"]));
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["settings"]["keep_versions"], 2);
+
+    // A bad value is refused, with the reason, and changes nothing.
+    for (k, val) in [
+        ("policy", "sometimes"),
+        ("keep_versions", "11"),
+        ("keep_versions", "lots"),
+        ("sandbox", "full"),
+        ("schedule", "monthly"),
+        ("colour", "red"),
+    ] {
+        let v = failed_json(&run(root, &["config", "set", k, val, "--json"]));
+        assert_eq!(v["ok"], false, "{k} {val}");
+        assert!(v["error"].as_str().is_some_and(|e| !e.is_empty()));
+    }
+    let v = json_of(&run(root, &["config", "show", "--json"]));
+    assert_eq!(v["settings"]["policy"], "auto");
+    assert_eq!(v["settings"]["keep_versions"], 2);
+
+    let text = stdout(&run(root, &["config", "show"]));
+    assert!(
+        text.contains("policy") && text.contains("schedule"),
+        "{text}"
+    );
+}
+
+#[test]
+fn config_policy_all_changes_apps_with_a_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    add_fixture(root);
+    let o = run(
+        root,
+        &[
+            "source",
+            "set",
+            "foo-app",
+            "http://127.0.0.1:9/Foo.AppImage",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let v = json_of(&run(
+        root,
+        &["config", "set", "policy", "manual", "--all", "--json"],
+    ));
+    assert_eq!(v["changed_apps"], 1);
+    let v = json_of(&run(root, &["list", "--json"]));
+    assert_eq!(v["apps"][0]["policy"], "manual");
+    let v = failed_json(&run(
+        root,
+        &["config", "set", "sandbox", "none", "--all", "--json"],
+    ));
+    assert!(v["error"].as_str().unwrap().contains("--all"));
+}
+
+#[test]
+fn list_json_has_size_and_icon() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    add_fixture(root);
+    let v = json_of(&run(root, &["list", "--json"]));
+    let app = &v["apps"][0];
+    assert!(app["size_bytes"].as_u64().is_some_and(|n| n > 0), "{app}");
+    assert_eq!(app["external"], false);
+    assert!(
+        app["icon"].is_null() || app["icon"] == "appofholding-foo-app",
+        "{app}"
+    );
+}
+
+#[test]
+fn remove_dry_run_json_plans_without_removing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let file = add_fixture(root);
+
+    let v = json_of(&run(root, &["remove", "foo-app", "--dry-run", "--json"]));
+    assert_eq!(v["version"], 1);
+    assert_eq!(v["would_refuse"], false);
+    let changes = v["changes"].as_array().unwrap();
+    let groups: Vec<&str> = changes.iter().filter_map(|c| c["group"].as_str()).collect();
+    assert!(
+        groups.contains(&"Menu") && groups.contains(&"AppImage"),
+        "{v}"
+    );
+    let image = changes.iter().find(|c| c["group"] == "AppImage").unwrap();
+    assert_eq!(image["reversible"], false);
+    assert!(image["bytes"].as_u64().unwrap() > 0);
+    assert!(file.exists(), "a dry run removes nothing");
+    assert!(stdout(&run(root, &["list"])).contains("foo-app"));
+
+    // With --keep-file the AppImage is not part of the plan.
+    let v = json_of(&run(
+        root,
+        &["remove", "foo-app", "--keep-file", "--dry-run", "--json"],
+    ));
+    assert!(
+        v["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["group"] != "AppImage")
+    );
+
+    // An unknown app fails with the reason in the envelope.
+    let v = failed_json(&run(root, &["remove", "nope", "--dry-run", "--json"]));
+    assert_eq!(v["ok"], false);
+
+    let v = json_of(&run(root, &["remove", "foo-app", "--json"]));
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["id"], "foo-app");
+    assert!(!file.exists());
+    assert!(stdout(&run(root, &["list"])).contains("No apps yet"));
+}
+
+#[test]
+fn update_dry_run_json_lists_what_the_last_check_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    add_fixture(root);
+    // Nothing found yet: the plan says so and refuses to be confirmed.
+    let v = json_of(&run(root, &["update", "--dry-run", "--json"]));
+    assert_eq!(v["would_refuse"], true);
+    assert!(v["changes"].as_array().unwrap().is_empty());
+    assert!(!v["reason"].as_str().unwrap().is_empty());
+    // --json needs --dry-run, and a dry run excludes streaming.
+    assert!(!run(root, &["update", "--json"]).status.success());
+    assert!(
+        !run(root, &["update", "--dry-run", "--ndjson"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn check_and_update_stream_ndjson() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    add_fixture(root);
+    let o = run(
+        root,
+        &[
+            "source",
+            "set",
+            "foo-app",
+            "http://127.0.0.1:9/Foo.AppImage",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    let o = run(root, &["check", "--ndjson"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let ev = lines_of(&o);
+    assert_eq!(ev.first().unwrap()["event"], "start");
+    assert_eq!(ev.first().unwrap()["total"], 1);
+    assert_eq!(ev[1]["event"], "checked");
+    assert_eq!(ev[1]["id"], "foo-app");
+    assert_eq!(ev[1]["index"], 1);
+    assert!(ev[1]["error"].as_str().is_some_and(|e| !e.is_empty()));
+    assert_eq!(ev.last().unwrap()["event"], "done");
+    assert_eq!(ev.last().unwrap()["updates"], 0);
+
+    // An update that can't be fetched is a result line, then a non-zero exit.
+    let o = run(root, &["update", "--ndjson"]);
+    let ev = lines_of(&o);
+    assert_eq!(ev[0]["event"], "start");
+    assert_eq!(ev[0]["name"], "Foo App");
+    let result = ev.iter().find(|e| e["event"] == "result").unwrap();
+    assert_eq!(result["app"], "foo-app");
+    assert_eq!(result["outcome"], "failed");
+    assert!(!result["message"].as_str().unwrap().is_empty());
+    assert_eq!(ev.last().unwrap()["event"], "done");
+    assert_eq!(ev.last().unwrap()["failed"], 1);
+    assert!(!o.status.success());
+}

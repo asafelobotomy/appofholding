@@ -221,8 +221,8 @@ ThemedPage {
             spacing: Kirigami.Units.largeSpacing
             QQC2.Label {
                 text: page.d.externalFile
-                    ? qsTr("This removes the menu entry. The AppImage file is yours and stays where it is: %1").arg(page.d.path)
-                    : qsTr("This removes the menu entry and the AppImage file.")
+                    ? qsTr("This removes the menu entry and the versions kept for rollback. The AppImage file is yours and stays where it is: %1").arg(page.d.path)
+                    : qsTr("This removes the menu entry, the AppImage file and the versions kept for rollback.")
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
                 Layout.maximumWidth: Kirigami.Units.gridUnit * 28

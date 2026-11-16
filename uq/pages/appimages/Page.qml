@@ -1,283 +1,285 @@
-// appOFholding's AppImages page in uQ Settings (docs/settings-pages.md in the uQ repository):
-// the library with each app's update status and policy, "Check now", "Update all", and the
-// background check schedule. Everything runs through the commands declared in page.toml; all
-// text goes through UqLabel (plain text only).
+// appOFholding's AppImages page in uQ Settings (docs/settings-pages.md in the uQ repository): what
+// is in the library and how each app is doing, checking and updating with progress, removal
+// with a preview, and the settings every app shares. Everything goes through the commands
+// declared in page.toml; logic.js reads their answers and words the result. The page never
+// forces anything: appOFholding's own refusals are shown as they are.
+// Laid out like Settings' own pages (uq_api = 3): three tabs of cards. The window of
+// appOFholding has the same things under the same names.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.uq.settings
+import "logic.js" as Logic
 
-Item {
+SettingsPage {
     id: page
 
     property var ctx
-    /// The [[setting]] id Settings search jumped to.
+    property var theme
+    /// The [[setting]] row Settings search jumped to; the rows flash, and their tab opens.
     property string highlight
-
-    // `appofholding list --json` and `schedule status --json`, or null before they answer.
+    /// The library (Logic.libraryView), null until `list` answers.
     property var library: null
-    property var schedule: null
-    // The command that is running ("" when none), so buttons wait for it.
-    property string running: ""
-    // Why the library couldn't be read, and why the last action failed.
-    property string loadError: ""
-    property string actionError: ""
-    readonly property string problem: actionError !== "" ? actionError : loadError
-    // The last output of an update or schedule change, shown under the buttons.
-    property string note: ""
+    /// The key of the row whose write or run is going, "" when none. One at a time.
+    property string workingKey: ""
+    /// A check or update that is running or has just finished (Logic.reduce), and whose it is.
+    property var progress: null
+    property string progressKey: ""
+    property bool streaming: false
+    readonly property bool busy: page.workingKey !== "" || page.streaming
+    /// What each action said, by row key: {message, failed}.
+    property var notes: ({})
+    property var openedWith: null
 
-    readonly property var apps: library && Array.isArray(library.apps) ? library.apps : []
-    readonly property int updates: library && typeof library.updates === "number" ? library.updates : 0
+    pageId: "appimages"
 
-    readonly property var policyKeys: ["auto", "notify", "manual", "pinned"]
-    readonly property var policyNames: ["Install automatically", "Tell me", "Stay quiet, I'll update myself", "Never change this app"]
-    readonly property var intervalKeys: ["", "hourly", "daily", "weekly"]
-    readonly property var intervalNames: ["Off", "Every hour", "Every day", "Every week"]
+    function noteFor(key) {
+        return page.notes[key] || null;
+    }
 
     function color(name, fallback) {
-        const c = page.ctx && page.ctx.theme && page.ctx.theme.colors;
-        return (c && c[name]) || fallback;
+        const colors = page.ctx && page.ctx.theme ? page.ctx.theme.colors : null;
+        return (colors && colors[name]) || fallback;
     }
 
-    function errorOf(result) {
-        if (result.error === undefined)
-            return "";
-        const out = typeof result.output === "string" ? result.output.trim() : "";
-        return out !== "" ? String(result.error) + "\n" + out : String(result.error);
+    function errorColor() {
+        return page.color("error", "red");
     }
 
-    function load() {
-        if (!page.ctx)
+    function accentColor() {
+        return page.color("accent", "steelblue");
+    }
+
+    function textColor() {
+        return page.color("text", "black");
+    }
+
+    function showLibrary(result) {
+        const next = Logic.libraryView(result);
+        if (next !== null)
+            page.library = next;
+    }
+
+    /// Reads the library again (it is also followed, so this is for after an action).
+    function reload() {
+        if (page.ctx)
+            page.ctx.command.run("list", [], page.showLibrary);
+    }
+
+    /// Runs one action (a command that changes something) for the row `key`, then `done(result)`
+    /// unless the person cancelled. `sectionKey` also shows the answer under the whole card, for
+    /// a row that may be gone after it.
+    function write(key, command, args, done, sectionKey) {
+        if (page.busy || !page.ctx)
             return;
-        page.ctx.command.run("list", [], result => {
-            if (result.error !== undefined || !result.output || result.output.version !== 1) {
-                page.loadError = String(result.error || "appofholding gave no list");
+        const why = Logic.argsProblem(command, args);
+        if (why !== "") {
+            page.notes = Logic.withNote(page.notes, key, { message: why, failed: true });
+            return;
+        }
+        page.notes = Logic.withNote(page.notes, key, null);
+        if (sectionKey)
+            page.notes = Logic.withNote(page.notes, sectionKey, null);
+        page.workingKey = key;
+        page.ctx.command.run(command, args, result => {
+            page.workingKey = "";
+            if (Logic.isCancelled(result))
+                return;
+            const note = command.indexOf("remove") === 0 ? Logic.removeOutcome(result)
+                : command.indexOf("config") === 0 ? page.configNote(result)
+                : Logic.textOutcome(result);
+            page.notes = Logic.withNote(page.notes, key, note);
+            if (sectionKey)
+                page.notes = Logic.withNote(page.notes, sectionKey, note);
+            if (done)
+                done(result);
+            page.reload();
+        });
+    }
+
+    /// What `config set` said: nothing when it worked (the setting follows the file), the
+    /// reason when appOFholding refused.
+    function configNote(result) {
+        const env = Logic.envelope(result);
+        if (env.ok) {
+            const n = env.output && typeof env.output.changed_apps === "number" ? env.output.changed_apps : 0;
+            return n > 0 ? { message: "Changed " + Logic.plural(n, "app", "apps") + ".", failed: false } : null;
+        }
+        return { message: env.error, failed: true };
+    }
+
+    /// Runs a command that streams (check, update): its events drive `progress`.
+    function stream(kind, command, args, key) {
+        if (page.busy || !page.ctx)
+            return;
+        const why = Logic.argsProblem(command, args);
+        if (why !== "") {
+            page.notes = Logic.withNote(page.notes, key, { message: why, failed: true });
+            return;
+        }
+        page.notes = Logic.withNote(page.notes, key, null);
+        page.progress = Logic.startProgress(kind);
+        page.progressKey = key;
+        page.streaming = true;
+        page.ctx.command.stream(command, args, event => {
+            page.progress = Logic.reduce(page.progress, event);
+        }, result => {
+            page.streaming = false;
+            if (Logic.isCancelled(result)) {
+                page.progress = null;
+                page.progressKey = "";
                 return;
             }
-            page.loadError = "";
-            page.library = result.output;
-        });
-        page.ctx.command.run("schedule-status", [], result => {
-            page.schedule = result.error === undefined && result.output ? result.output : null;
-        });
-    }
-
-    // Run a command that changes something, show what it said, then read everything again.
-    function act(id, args) {
-        if (!page.ctx || page.running !== "")
-            return;
-        page.running = id;
-        page.note = "";
-        page.actionError = "";
-        page.ctx.command.run(id, args, result => {
-            page.running = "";
-            if (result.cancelled)
-                return;
-            const err = page.errorOf(result);
-            page.actionError = err;
-            if (err === "" && typeof result.output === "string")
-                page.note = result.output.trim();
-            page.load();
+            const problem = Logic.streamProblem(page.progress, result);
+            if (problem !== "")
+                page.notes = Logic.withNote(page.notes, key, { message: problem, failed: true });
+            page.reload();
         });
     }
 
-    function checkNow() {
-        if (!page.ctx || page.running !== "")
-            return;
-        page.running = "check";
-        page.note = "";
-        page.actionError = "";
-        page.ctx.command.run("check", [], result => {
-            page.running = "";
-            if (result.error !== undefined) {
-                page.actionError = String(result.error);
-            } else {
-                const n = result.output && typeof result.output.updates === "number" ? result.output.updates : 0;
-                page.note = n === 0 ? "No updates found." : (n === 1 ? "1 update found." : n + " updates found.");
-            }
-            page.load();   // the check saved its results; the list shows them
-        });
+    // Follow the library from the first moment: the summary, the updates and every row come from it.
+    onCtxChanged: {
+        if (page.ctx && page.ctx !== page.openedWith) {
+            page.openedWith = page.ctx;
+            page.ctx.command.watch("list", page.showLibrary);
+        }
     }
 
-    // The combo index of an installed timer's interval; "Every day" when it was edited by hand.
-    function intervalIndex(interval) {
-        const i = page.intervalKeys.indexOf(String(interval));
-        return i > 0 ? i : 2;
-    }
+    SettingsTab {
+        title: "Overview"
+        iconName: "view-list-details"
 
-    function statusLine(app) {
-        const version = app.version ? String(app.version) : "unknown version";
-        if (!app.has_source)
-            return version + " · no update source";
-        if (app.policy === "pinned")
-            return version + " · pinned";
-        if (app.error)
-            return version + " · check failed: " + String(app.error);
-        if (app.update)
-            return version + " → " + String(app.latest);
-        if (app.status === "up-to-date")
-            return version + " · up to date";
-        if (app.status === "update-available" && app.skipped)
-            return version + " · skipping " + String(app.skipped);
-        if (app.status === "unknown")
-            return version + " · can't tell (latest " + String(app.latest) + ")";
-        return version + " · not checked yet";
-    }
+        SettingsCard {
+            title: "Updates"
+            iconName: "system-software-update"
+            help: "Checking asks each app's update source. An update keeps the version it replaces, so you can go back."
+            wide: true
+            Layout.fillWidth: true
 
-    onCtxChanged: load()
-
-    QQC2.ScrollView {
-        anchors.fill: parent
-        contentWidth: availableWidth
-
-        ColumnLayout {
-            width: parent.width
-            spacing: 12
-
-            // ---- summary and the two big actions
-            ColumnLayout {
+            SettingRow {
+                settingId: "updates"
+                label: Logic.summary(page.library)
+                highlight: page.highlight
                 Layout.fillWidth: true
-                Layout.margins: 16
-                spacing: 8
 
-                UqLabel {
-                    Layout.fillWidth: true
-                    font.bold: true
-                    text: page.library === null ? (page.problem !== "" ? "AppImages are unavailable" : "Reading the library…")
-                        : page.apps.length === 0 ? "No AppImages yet"
-                        : page.updates === 0 ? page.apps.length + (page.apps.length === 1 ? " AppImage, up to date" : " AppImages, all up to date")
-                        : page.updates + (page.updates === 1 ? " update" : " updates") + " for " + page.apps.length + " AppImages"
+                QQC2.Button {
+                    text: "Check for updates"
+                    icon.name: "view-refresh"
+                    enabled: !page.busy && page.library !== null && page.library.problem === ""
+                    onClicked: page.stream("check", "check", [], "all")
                 }
-                RowLayout {
-                    spacing: 8
-                    QQC2.Button {
-                        text: "Check now"
-                        icon.name: "view-refresh"
-                        enabled: page.running === "" && page.library !== null
-                        onClicked: page.checkNow()
-                    }
-                    QQC2.Button {
-                        objectName: "update-all"
-                        text: "Update all"
-                        icon.name: "system-software-update"
-                        enabled: page.running === "" && page.updates > 0
-                        highlighted: page.highlight === "update-all"
-                        onClicked: page.act("update-all", [])
-                    }
-                    QQC2.BusyIndicator {
-                        visible: page.running !== ""
-                        running: visible
-                        implicitWidth: 24
-                        implicitHeight: 24
-                    }
-                }
-                UqLabel {
-                    Layout.fillWidth: true
-                    visible: page.problem !== ""
-                    text: page.problem
-                    color: page.color("error", "red")
-                    wrapMode: Text.Wrap
-                }
-                UqLabel {
-                    Layout.fillWidth: true
-                    visible: page.note !== ""
-                    text: page.note
-                    color: page.color("text_muted", "gray")
-                    wrapMode: Text.Wrap
-                    maximumLineCount: 12
-                    elide: Text.ElideRight
+                QQC2.Button {
+                    objectName: "update-all"
+                    text: "Update all"
+                    icon.name: "system-software-update"
+                    enabled: !page.busy && page.library !== null && page.library.updates > 0
+                    onClicked: page.stream("update", "update-all", [], "all")
                 }
             }
-
-            // ---- the library
-            ColumnLayout {
+            ErrorCard {
+                title: "Couldn't read your AppImages"
+                detail: page.library ? page.library.problem : ""
+                visible: page.library !== null && page.library.problem !== ""
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                spacing: 4
+            }
+            ProgressView {
+                host: page
+                progressKey: "all"
+                Layout.fillWidth: true
+            }
+            Outcome {
+                host: page
+                noteKey: "all"
+                Layout.fillWidth: true
+            }
+        }
 
-                UqLabel {
-                    text: "Apps and their update policy"
-                    font.bold: true
-                    color: page.highlight === "policy" || page.highlight === "apps" ? page.color("accent", "steelblue")
-                                                                                       : page.color("text", "black")
-                }
+        Repeater {
+            model: page.library !== null && page.library.problem === "" ? Logic.groups(page.library.apps).filter(g => g.title !== "Apps") : []
+
+            SettingsCard {
+                id: group
+
+                required property var modelData
+
+                title: group.modelData.title
+                iconName: group.modelData.title === "Needs attention" ? "dialog-warning" : "software-update-available"
+                wide: true
+                Layout.fillWidth: true
+
                 Repeater {
-                    model: page.apps
-                    delegate: RowLayout {
+                    model: group.modelData.apps
+
+                    AppRow {
                         required property var modelData
+
+                        host: page
+                        app: modelData
+                        full: false
                         Layout.fillWidth: true
-                        spacing: 8
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 0
-                            UqLabel {
-                                Layout.fillWidth: true
-                                text: String(modelData.name)
-                                elide: Text.ElideRight
-                            }
-                            UqLabel {
-                                Layout.fillWidth: true
-                                text: page.statusLine(modelData)
-                                color: modelData.update ? page.color("accent", "steelblue") : page.color("text_muted", "gray")
-                                elide: Text.ElideRight
-                            }
-                        }
-                        QQC2.Button {
-                            visible: modelData.update === true
-                            text: "Update"
-                            enabled: page.running === ""
-                            onClicked: page.act("update", [String(modelData.id)])
-                        }
-                        QQC2.ComboBox {
-                            visible: modelData.has_source === true
-                            enabled: page.running === ""
-                            implicitWidth: 230
-                            model: page.policyNames
-                            currentIndex: Math.max(0, page.policyKeys.indexOf(String(modelData.policy)))
-                            onActivated: index => page.act("policy", [String(modelData.id), page.policyKeys[index]])
-                        }
                     }
                 }
             }
+        }
+    }
 
-            // ---- background checks
-            ColumnLayout {
+    SettingsTab {
+        title: "Apps"
+        iconName: "applications-all"
+
+        SettingsCard {
+            title: "Your AppImages"
+            iconName: "applications-all"
+            help: "Remove shows everything it would remove before it removes anything. Adding and importing AppImages is done in appOFholding."
+            wide: true
+            Layout.fillWidth: true
+            actions: [
+                QQC2.Button {
+                    text: "Add or import…"
+                    icon.name: "list-add"
+                    onClicked: page.ctx.openApp("io.github.appofholding.desktop")
+                }
+            ]
+
+            SettingRow {
+                settingId: "apps"
+                label: page.library !== null && page.library.problem === "" ? Logic.plural(page.library.apps.length, "AppImage", "AppImages") : "AppImages"
+                highlight: page.highlight
                 Layout.fillWidth: true
-                Layout.margins: 16
-                spacing: 4
+            }
+            UqLabel {
+                text: "Nothing here yet. Add an AppImage in appOFholding and it shows up here."
+                visible: page.library !== null && page.library.problem === "" && page.library.apps.length === 0
+                opacity: 0.7
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Outcome {
+                host: page
+                noteKey: "section"
+                Layout.fillWidth: true
+            }
+            Repeater {
+                model: page.library !== null && page.library.problem === "" ? Logic.groups(page.library.apps).reduce((all, g) => all.concat(g.apps), []) : []
 
-                UqLabel {
-                    text: "Background update checks"
-                    font.bold: true
-                    color: page.highlight === "schedule" ? page.color("accent", "steelblue") : page.color("text", "black")
-                }
-                UqLabel {
+                AppRow {
+                    required property var modelData
+
+                    host: page
+                    app: modelData
                     Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    color: page.color("text_muted", "gray")
-                    text: "A timer checks your AppImages, installs the ones set to install automatically and tells you about the rest."
-                }
-                QQC2.ComboBox {
-                    id: interval
-                    objectName: "interval"
-                    implicitWidth: 230
-                    enabled: page.running === "" && page.schedule !== null
-                    model: page.intervalNames
-                    currentIndex: page.schedule && page.schedule.installed
-                        ? page.intervalIndex(page.schedule.interval) : 0
-                    onActivated: index => {
-                        if (index === 0) {
-                            page.act("schedule-remove", []);
-                        } else {
-                            page.act("schedule-install", [page.intervalKeys[index]]);
-                        }
-                        // Show the saved state until the commands answer.
-                        currentIndex = Qt.binding(() => page.schedule && page.schedule.installed
-                            ? page.intervalIndex(page.schedule.interval) : 0);
-                    }
                 }
             }
+        }
+    }
+
+    SettingsTab {
+        title: "Preferences"
+        iconName: "configure"
+
+        PreferencesSection {
+            host: page
+            Layout.fillWidth: true
         }
     }
 }
