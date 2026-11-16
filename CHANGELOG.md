@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - **Scan AppImages with oysterAV.** With [oysterAV](https://github.com/asafelobotomy/oysterAV)
   installed, `appofholding config set scan warn` scans each AppImage as it is added (also from a
