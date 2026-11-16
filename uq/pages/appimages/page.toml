@@ -115,7 +115,7 @@ args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
 id = "scan-all"
 argv = ["/usr/bin/appofholding", "scan", "--all", "--ndjson"]
 output = "ndjson"
-timeout_ms = 1800000
+timeout_ms = 600000
 
 [[command]]
 id = "scan"
