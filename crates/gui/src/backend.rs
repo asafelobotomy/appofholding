@@ -67,13 +67,13 @@ pub mod qobject {
         #[qinvokable]
         fn desktop_settings(self: &Backend) -> QString;
 
-        /// Settings for every app: {policy, keepVersions, maxKeepVersions, sandbox}.
+        /// Settings for every app: {policy, keepVersions, maxKeepVersions, sandbox, scan}.
         #[cxx_name = "libraryDefaults"]
         #[qinvokable]
         fn library_defaults(self: &Backend) -> QString;
 
         // ---- changes: "" on success, otherwise the error message
-        /// Change some of {policy, keepVersions, sandbox}. Lowering keepVersions deletes the
+        /// Change some of {policy, keepVersions, sandbox, scan}. Lowering keepVersions deletes the
         /// extra kept versions.
         #[cxx_name = "setLibraryDefaults"]
         #[qinvokable]
@@ -547,6 +547,8 @@ fn run_task(
         "notifyCheck" => with_lib(|l| service::notify_check(l, &http, a == "force")),
         "check" => with_lib(|l| service::check_app(l, &http, id)),
         "update" => with_lib(|l| service::update_app(l, &http, id, progress)),
+        // oysterAV scans the app's AppImage; waits for it, so it is a task. Answers {state, detail}.
+        "scan" => with_lib(|l| service::scan_app(l, id)),
         // a = link, b = asset pattern, c = channel
         "resolve" => service::resolve_link(a, b, c),
         "install" => with_lib(|l| service::install_link(l, &http, a, b, c, progress)),

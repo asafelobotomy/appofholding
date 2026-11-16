@@ -208,6 +208,45 @@ ColumnLayout {
     }
 
     SettingsCard {
+        title: "Antivirus"
+        iconName: "security-medium"
+        help: "oysterAV only looks. A file it flags stays where it is; you decide in oysterAV what happens to it. Needs oysterAV installed."
+        visible: section.ready
+        Layout.fillWidth: true
+
+        SettingRow {
+            settingId: "scan"
+            label: "Scan AppImages with oysterAV"
+            highlight: section.host ? section.host.highlight : ""
+            Layout.fillWidth: true
+
+            UqComboBox {
+                id: scan
+                objectName: "scan-mode"
+                model: Logic.SCAN_NAMES
+                implicitWidth: 230
+                enabled: section.idle
+                currentIndex: section.ready ? Logic.indexOfKey(Logic.SCAN_KEYS, section.view.settings.scan, 0) : 0
+                onActivated: index => {
+                    scan.currentIndex = Qt.binding(() => section.ready ? Logic.indexOfKey(Logic.SCAN_KEYS, section.view.settings.scan, 0) : 0);
+                    section.save("scan", Logic.SCAN_KEYS[index]);
+                }
+            }
+        }
+        UqLabel {
+            text: Logic.SCAN_HELP[scan.currentIndex]
+            wrapMode: Text.Wrap
+            opacity: 0.7
+            Layout.fillWidth: true
+        }
+        Outcome {
+            host: section.host
+            noteKey: "pref:scan"
+            Layout.fillWidth: true
+        }
+    }
+
+    SettingsCard {
         title: "More in appOFholding"
         iconName: "io.github.appofholding"
         help: "Appearance, the library folder, the tray and each app's launch options and sandbox are in its own window."

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Scan AppImages with oysterAV.** With [oysterAV](https://github.com/asafelobotomy/oysterAV)
+  installed, `appofholding config set scan warn` scans each AppImage as it is added (also from a
+  link or an import) or updated and keeps the answer with the app; `block` also refuses to add or
+  install one in which oysterAV found a threat, and throws a flagged update download away. A
+  scan on request works in every mode: `appofholding scan <id>…|--all [--json|--ndjson]` (exit 1
+  on a threat), **Scan with oysterAV** in the window's app menu, and in uQ Settings → AppImages
+  (Scan with oysterAV on Overview and per app, a banner and a mark on a flagged app, and an
+  Antivirus choice under Preferences). `list --json` gains `scan` per app. A verdict applies to
+  one build only: after an update it is gone until the new file is scanned. oysterAV only
+  looks; a flagged file is never moved or deleted by appOFholding.
+
 ## 0.9.0
 
 - **A new AppImages page in uQ Settings** (Apps → AppImages), laid out like uQ's own pages with

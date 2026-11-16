@@ -77,7 +77,7 @@ test("argument patterns are the same in logic.js and page.toml", () => {
     }
     assert.equal((c.args ?? []).length, Object.keys(L.PATTERNS[c.id] ?? {}).length, `${c.id}: argument count`);
   }
-  assert.equal(seen, 12);
+  assert.equal(seen, 13);
 });
 
 const HOSTILE = ["-rf", "--purge-data", "a\nb", "", "x".repeat(200), "../x", "$(id)", "-", "a b", "A\u0000"];
@@ -241,11 +241,11 @@ test("envelope, removal and text outcomes", () => {
 });
 
 test("configView reads the settings and clamps what it can't trust", () => {
-  const v = L.configView({ code: 0, output: { version: 1, ok: true, settings: { policy: "auto", keep_versions: 4, sandbox: "strict", schedule: "weekly" }, limits: { max_keep_versions: 10 }, apps_with_source: 3 } });
-  assert.deepEqual(v.settings, { policy: "auto", keep_versions: 4, sandbox: "strict", schedule: "weekly" });
+  const v = L.configView({ code: 0, output: { version: 1, ok: true, settings: { policy: "auto", keep_versions: 4, sandbox: "strict", schedule: "weekly", scan: "block" }, limits: { max_keep_versions: 10 }, apps_with_source: 3 } });
+  assert.deepEqual(v.settings, { policy: "auto", keep_versions: 4, sandbox: "strict", schedule: "weekly", scan: "block" });
   assert.equal(v.withSource, 3);
-  const odd = L.configView({ code: 0, output: { version: 1, ok: true, settings: { policy: "wild", sandbox: 3, schedule: "monthly" } } });
-  assert.deepEqual(odd.settings, { policy: "notify", keep_versions: 2, sandbox: "none", schedule: "off" });
+  const odd = L.configView({ code: 0, output: { version: 1, ok: true, settings: { policy: "wild", sandbox: 3, schedule: "monthly", scan: "loud" } } });
+  assert.deepEqual(odd.settings, { policy: "notify", keep_versions: 2, sandbox: "none", schedule: "off", scan: "off" });
   assert.equal(L.configView({ error: "no" }).problem, "no");
   assert.match(L.configView({ code: 0, output: { version: 1, ok: true } }).problem, /doesn't understand/);
   assert.equal(L.configView({ error: "Cancelled", cancelled: true }), null);
@@ -258,4 +258,32 @@ test("choice lists line up with their keys", () => {
   assert.equal(L.SCHEDULE_KEYS.length, L.SCHEDULE_NAMES.length);
   assert.equal(L.SANDBOX_KEYS.length, L.SANDBOX_NAMES.length);
   assert.equal(L.SANDBOX_KEYS.length, L.SANDBOX_HELP.length);
+  assert.equal(L.SCAN_KEYS.length, L.SCAN_NAMES.length);
+  assert.equal(L.SCAN_KEYS.length, L.SCAN_HELP.length);
+});
+
+test("oysterAV: what the list says is read defensively, and the words never hide a threat", () => {
+  const row = (scan) => L.libraryView({ code: 0, output: { version: 1, apps: [{ id: "foo", name: "Foo", scan }], updates: 0 } }).apps[0];
+  assert.equal(row(null).scan, null);
+  assert.equal(row({ state: "weird", detail: "x" }).scan, null);
+  assert.equal(L.scanText(row(null)), "");
+  assert.equal(L.scanText(row({ state: "clean", detail: "" })), "oysterAV found no threats.");
+  assert.match(L.scanText(row({ state: "threat", detail: "Win.Test" })), /oysterAV found Win\.Test\. Don't run it/);
+  assert.match(L.scanText(row({ state: "error", detail: "oysterAV is not installed" })), /couldn't scan it: oysterAV is not installed/);
+  assert.equal(L.threatCount([row({ state: "threat", detail: "" }), row({ state: "clean", detail: "" }), row(null)]), 1);
+});
+
+test("oysterAV: a scan streams one line per app and ends with the totals", () => {
+  let st = L.startProgress("scan");
+  assert.equal(L.progressLine(st), "Asking oysterAV…");
+  st = L.reduce(st, { event: "start", total: 2 });
+  st = L.reduce(st, { event: "scanned", index: 1, total: 2, id: "foo", name: "Foo", state: "clean", detail: "" });
+  assert.equal(st.results.length, 0, "clean apps are not listed");
+  assert.equal(L.fraction(st), 0.5);
+  st = L.reduce(st, { event: "scanned", index: 2, total: 2, id: "bar", name: "Bar", state: "threat", detail: "Win.Test" });
+  assert.equal(st.results[0].text, "Bar: oysterAV found Win.Test");
+  assert.equal(st.results[0].outcome, "failed");
+  st = L.reduce(st, { event: "done", threats: 1, errors: 0, total: 2 });
+  assert.equal(L.progressLine(st), "1 threat found.");
+  assert.equal(L.reduce(L.startProgress("scan"), { event: "done", threats: 0, errors: 2, total: 2 }).summary, "No threats found, 2 couldn't be scanned.");
 });

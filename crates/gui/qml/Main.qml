@@ -298,6 +298,13 @@ Kirigami.ApplicationWindow {
                 root.reload()
                 if (!ok) root.showPassiveNotification(payload)
                 break
+            case "scan":
+                root.reload()
+                if (!ok) root.showPassiveNotification(payload, "long")
+                else if (data.state === "threat") root.showPassiveNotification(qsTr("oysterAV found %1. Don't run this app.").arg(data.detail || qsTr("a threat")), "long")
+                else if (data.state === "clean") root.showPassiveNotification(qsTr("oysterAV found no threats"))
+                else root.showPassiveNotification(qsTr("oysterAV couldn't scan it: %1").arg(data.detail || qsTr("unknown reason")), "long")
+                break
             case "update":
                 root.reload()
                 if (!ok) {

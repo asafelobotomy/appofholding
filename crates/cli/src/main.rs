@@ -27,6 +27,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::json;
 
 mod pagejson;
+mod scancmd;
 use pagejson::ConfigCmd;
 
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
@@ -62,6 +63,8 @@ enum Cmd {
         #[arg(long)]
         post_install: Option<String>,
     },
+    /// Have oysterAV scan the AppImages in the library, and keep what it says.
+    Scan(scancmd::ScanArgs),
     /// List apps in the library.
     List {
         /// Print JSON (with each app's update policy and last check) instead of a table.
@@ -1985,9 +1988,12 @@ fn main() -> Result<()> {
                 println!("\nApply one with: appofholding suggest <id> --apply <key>");
             }
         }
+        Cmd::Scan(args) => scancmd::run(&library()?, args)?,
         Cmd::List { json: true } => {
             let lib = library()?;
-            println!("{}", list_json(&lib.list()?, &lib.sources()?));
+            let mut doc = list_json(&lib.list()?, &lib.sources()?);
+            scancmd::add_verdicts(&lib, &mut doc);
+            println!("{doc}");
         }
         Cmd::List { json: false } => {
             let apps = library()?.list()?;

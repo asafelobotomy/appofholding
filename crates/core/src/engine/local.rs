@@ -101,6 +101,8 @@ impl Library {
             )));
         }
         let ins = inspect(path)?;
+        let (sha256, _) = image::hash_file(path)?;
+        let verdict = self.scan_before_install(path, &sha256)?;
         let _lock = self.lock_app(id)?;
         let app = self.get(id)?;
         let rec = self.db.get_source(id)?;
@@ -155,6 +157,9 @@ impl Library {
             None,
         )?;
 
+        if let Some(v) = &verdict {
+            let _ = self.record_verdict(id, v);
+        }
         if let Some(src) = rec {
             // What is installed now is what the file says; the next check compares against it.
             self.db

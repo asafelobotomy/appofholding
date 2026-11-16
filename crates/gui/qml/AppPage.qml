@@ -115,6 +115,12 @@ ThemedPage {
                         text: page.d.sandbox ? Util.sandboxLabel(page.d.sandbox.level) : ""
                     }
                     Pill {
+                        visible: !!page.d.scan && page.d.scan.state !== "error"
+                        tone: page.d.scan && page.d.scan.state === "threat" ? "negative" : "positive"
+                        iconName: page.d.scan && page.d.scan.state === "threat" ? "dialog-warning" : "security-medium"
+                        text: !page.d.scan ? "" : page.d.scan.state === "threat" ? qsTr("Threat: %1").arg(page.d.scan.detail) : qsTr("No threats found")
+                    }
+                    Pill {
                         visible: !!page.d.running
                         tone: "info"
                         iconName: "media-playback-start"

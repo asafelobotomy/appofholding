@@ -45,6 +45,21 @@ ColumnLayout {
                 opacity: row.status.tone === "plain" ? 0.7 : 1
                 Layout.fillWidth: true
             }
+            UqLabel {
+                id: scanNote
+                objectName: "scan-note-" + row.app.id
+                text: Logic.scanText(row.app)
+                visible: row.full && text !== ""
+                wrapMode: Text.Wrap
+                opacity: row.app.scan && row.app.scan.state === "threat" ? 1 : 0.7
+                Layout.fillWidth: true
+            }
+            Binding {
+                target: scanNote
+                property: "color"
+                value: row.host.errorColor()
+                when: !!row.host && !!row.app.scan && row.app.scan.state === "threat"
+            }
             Binding {
                 target: subtitle
                 property: "color"
@@ -95,6 +110,11 @@ ColumnLayout {
                     visible: !row.app.update && row.app.skipped !== ""
                     height: visible ? implicitHeight : 0
                     onTriggered: row.host.write(row.key, "unskip", [row.app.id])
+                }
+                QQC2.MenuItem {
+                    objectName: "scan-" + row.app.id
+                    text: "Scan with oysterAV"
+                    onTriggered: row.host.stream("scan", "scan", [row.app.id], row.key)
                 }
                 QQC2.MenuItem {
                     text: "Remove…"

@@ -100,6 +100,11 @@ pub fn list_apps(lib: &Library) -> Res<Value> {
             "latest": src.and_then(|s| s.last_latest.clone()),
             "error": src.and_then(|s| s.last_error.clone()),
             "policy": src.map(|s| s.policy.as_str()).unwrap_or(""),
+            // What oysterAV last said about this build, or null.
+            "scan": lib.scan_verdict(&a.id).map_err(e)?.map(|v| json!({
+                "state": v.state.as_str(),
+                "detail": v.detail,
+            })),
             "update": engine::counts_as_update(
                 src.and_then(|s| s.last_status.as_deref()),
                 src.and_then(|s| s.last_latest.as_deref()),
@@ -145,6 +150,10 @@ pub fn app_detail(lib: &Library, id: &str) -> Res<Value> {
         "desktopFile": a.desktop_file.display().to_string(),
         "externalFile": a.external_file,
         "icon": icon_url(&a),
+        "scan": lib.scan_verdict(&a.id).map_err(e)?.map(|v| json!({
+            "state": v.state.as_str(),
+            "detail": v.detail,
+        })),
         "running": !appofholding_core::running::running_pids(&a.appimage_path).is_empty(),
         "source": src.as_ref().map(|s| json!({
             "describe": s.source.describe(),
@@ -301,7 +310,7 @@ pub fn set_policy(lib: &Library, id: &str, policy: &str) -> Res<()> {
     lib.set_policy(id, p).map_err(e)
 }
 
-/// The settings that apply to every app: {policy, keepVersions, maxKeepVersions, sandbox}.
+/// The settings that apply to every app: {policy, keepVersions, maxKeepVersions, sandbox, scan}.
 pub fn library_defaults(lib: &Library) -> Res<Value> {
     let d = lib.defaults().map_err(e)?;
     Ok(json!({
@@ -309,10 +318,18 @@ pub fn library_defaults(lib: &Library) -> Res<Value> {
         "keepVersions": d.keep_versions,
         "maxKeepVersions": appofholding_core::defaults::MAX_KEEP_VERSIONS,
         "sandbox": d.sandbox.as_str(),
+        "scan": lib.scan_mode().map_err(e)?.as_str(),
     }))
 }
 
-/// Change any of `policy`, `keepVersions` and `sandbox`; keys left out stay as they are.
+/// Have oysterAV scan one app's AppImage and keep the answer: {state, detail}. Waits for it, so
+/// it runs as a task, not on the interface thread.
+pub fn scan_app(lib: &Library, id: &str) -> Res<Value> {
+    let v = lib.scan_app(id).map_err(e)?;
+    Ok(json!({ "state": v.state.as_str(), "detail": v.detail }))
+}
+
+/// Change any of `policy`, `keepVersions`, `sandbox` and `scan`; keys left out stay as they are.
 /// Every value is checked before anything is saved.
 pub fn set_library_defaults(lib: &Library, v: &Value) -> Res<()> {
     let policy = match v.get("policy").and_then(Value::as_str) {
@@ -324,6 +341,12 @@ pub fn set_library_defaults(lib: &Library, v: &Value) -> Res<()> {
             Some(l @ (Level::None | Level::Standard | Level::Strict)) => Some(l),
             _ => return Err("sandbox must be none, standard or strict".into()),
         },
+        None => None,
+    };
+    let scan = match v.get("scan").and_then(Value::as_str) {
+        Some(m) => Some(
+            appofholding_core::scan::ScanMode::parse(m).ok_or("scan must be off, warn or block")?,
+        ),
         None => None,
     };
     let keep = match v.get("keepVersions") {
@@ -339,6 +362,9 @@ pub fn set_library_defaults(lib: &Library, v: &Value) -> Res<()> {
     }
     if let Some(l) = sandbox {
         lib.set_default_sandbox(l).map_err(e)?;
+    }
+    if let Some(m) = scan {
+        lib.set_scan_mode(m).map_err(e)?;
     }
     if let Some(n) = keep {
         lib.set_keep_versions(n).map_err(e)?;
@@ -1193,6 +1219,17 @@ mod tests {
         );
         assert_eq!(apply_policy_all(&lib, "manual").unwrap()["changed"], 0);
         assert!(apply_policy_all(&lib, "bogus").is_err());
+    }
+
+    #[test]
+    fn the_oysterav_mode_is_a_default_and_is_validated() {
+        let (_tmp, lib) = lib();
+        assert_eq!(library_defaults(&lib).unwrap()["scan"], "off");
+        assert!(set_library_defaults(&lib, &json!({"scan": "loud"})).is_err());
+        set_library_defaults(&lib, &json!({"scan": "block"})).unwrap();
+        assert_eq!(library_defaults(&lib).unwrap()["scan"], "block");
+        // Nothing scanned yet: no verdict on any row.
+        assert_eq!(list_apps(&lib).unwrap(), json!([]));
     }
 
     /// Serialises the tests that point `APPOFHOLDING_ROOT` somewhere (it is process-wide).

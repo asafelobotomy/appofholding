@@ -14,8 +14,8 @@ Item {
             version: 1,
             updates: 1,
             apps: [
-                { id: "krita", name: "Krita", version: "5.2.0", icon: "appofholding-krita", size_bytes: 250000000, has_source: true, policy: "notify", status: "update-available", latest: "5.2.3", skipped: null, error: null, update: true },
-                { id: "tool", name: "Tool", version: "1.0", icon: null, size_bytes: 1200000, has_source: true, policy: "pinned", status: "up-to-date", latest: "1.0", skipped: null, error: null, update: false },
+                { id: "krita", name: "Krita", version: "5.2.0", icon: "appofholding-krita", size_bytes: 250000000, has_source: true, policy: "notify", status: "update-available", latest: "5.2.3", skipped: null, error: null, update: true, scan: { state: "clean", detail: "", at: 1791386830 } },
+                { id: "tool", name: "Tool", version: "1.0", icon: null, size_bytes: 1200000, has_source: true, policy: "pinned", status: "up-to-date", latest: "1.0", skipped: null, error: null, update: false, scan: { state: "threat", detail: "Win.Test.EICAR_HDB-1", at: 1791386830 } },
                 { id: "broken", name: "Broken", version: "2.0", icon: null, size_bytes: 5000, has_source: true, policy: "auto", status: null, latest: null, skipped: null, error: "HTTP 404", update: false },
                 { id: "local", name: "Local", version: null, icon: null, size_bytes: 100, has_source: false, policy: null, status: null, latest: null, skipped: null, error: null, update: false }
             ]
@@ -23,7 +23,7 @@ Item {
     readonly property var config: ({
             version: 1,
             ok: true,
-            settings: { policy: "notify", keep_versions: 2, sandbox: "none", schedule: "daily" },
+            settings: { policy: "notify", keep_versions: 2, sandbox: "none", schedule: "daily", scan: "off" },
             limits: { max_keep_versions: 10 },
             apps_with_source: 3
         })
@@ -34,6 +34,8 @@ Item {
             check: { code: 0, output: null },
             "update-all": { code: 0, output: null },
             update: { code: 0, output: null },
+            "scan-all": { code: 0, output: null },
+            scan: { code: 0, output: null },
             policy: { code: 0, output: "krita: update policy is now auto" },
             skip: { code: 0, output: "krita: skipping 5.2.3" },
             unskip: { code: 0, output: "krita: no longer skipping any version" },
@@ -52,6 +54,17 @@ Item {
                     { event: "checked", index: 1, total: 2, id: "krita", update: true, latest: "5.2.3", error: null },
                     { event: "checked", index: 2, total: 2, id: "broken", update: false, latest: null, error: "HTTP 404" },
                     { event: "done", updates: 1, total: 2 }
+                ],
+                "scan-all": [
+                    { event: "start", total: 2 },
+                    { event: "scanned", index: 1, total: 2, id: "krita", name: "Krita", state: "clean", detail: "", at: 1 },
+                    { event: "scanned", index: 2, total: 2, id: "tool", name: "Tool", state: "threat", detail: "Win.Test.EICAR_HDB-1", at: 1 },
+                    { event: "done", threats: 1, errors: 0, total: 2 }
+                ],
+                scan: [
+                    { event: "start", total: 1 },
+                    { event: "scanned", index: 1, total: 1, id: "krita", name: "Krita", state: "clean", detail: "", at: 1 },
+                    { event: "done", threats: 0, errors: 0, total: 1 }
                 ],
                 "update-all": [
                     { event: "start", app: "krita", name: "Krita", index: 1, total: 1 },
@@ -214,6 +227,45 @@ Item {
             spin.value = 9;
             spin.valueModified();
             hasText("at most 10 previous versions can be kept");
+        }
+
+        function test_a_threat_is_marked_on_its_row_and_the_overview_warns() {
+            hasText("oysterAV found a threat in 1 AppImage");
+            openTab("Apps");
+            hasText("oysterAV found Win.Test.EICAR_HDB-1. Don't run it; oysterAV can move it away.");
+            hasText("oysterAV found no threats.");
+        }
+
+        function test_scanning_everything_streams_and_names_what_it_found() {
+            hasText("1 update for 4 AppImages");
+            const b = root.find(loader.item, i => i.objectName === "scan-all");
+            verify(b !== null && b.enabled);
+            b.clicked();
+            tryVerify(() => ran("scan-all").length === 1);
+            hasText("1 threat found.");
+            hasText("Tool: oysterAV found Win.Test.EICAR_HDB-1");
+        }
+
+        function test_scanning_one_app_sends_only_its_id() {
+            hasText("1 update for 4 AppImages");
+            loader.item.stream("scan", "scan", ["krita"], "app:krita");
+            tryVerify(() => ran("scan").length === 1);
+            compare(ran("scan")[0], ["stream", "scan", ["krita"]]);
+            loader.item.stream("scan", "scan", ["--all"], "app:x");
+            wait(50);
+            compare(ran("scan").length, 1);
+        }
+
+        function test_the_scan_mode_is_chosen_in_preferences() {
+            openTab("Preferences");
+            tryVerify(() => root.find(loader.item, i => i.objectName === "scan-mode") !== null);
+            const box = root.find(loader.item, i => i.objectName === "scan-mode");
+            compare(box.currentIndex, 0);
+            box.currentIndex = 2;
+            box.activated(2);
+            tryVerify(() => ran("config-set").length === 1);
+            compare(ran("config-set")[0], ["run", "config-set", ["scan", "block"]]);
+            hasText("AppImages are not scanned unless you ask.");
         }
 
         function test_remove_runs_the_confirmed_command_and_says_what_stayed() {

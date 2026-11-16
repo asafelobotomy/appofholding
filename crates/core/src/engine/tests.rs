@@ -775,3 +775,55 @@ fn a_newer_local_file_updates_the_app_like_a_download() {
     assert_eq!(app.version.as_deref(), Some("0.9.0"));
     assert!(app.appimage_path.exists());
 }
+
+#[test]
+fn oysterav_looks_at_a_download_before_it_replaces_anything() {
+    use crate::scan::{ScanMode, ScanState};
+    use std::os::unix::fs::PermissionsExt;
+    let e = env();
+    // A stand-in oyst-cli that finds a threat in anything named 2.0.0. Only this test sets
+    // `scan` away from off, so no other test in this process ever starts it.
+    let fake = e.tmp.path().join("oyst-cli");
+    fs::write(
+        &fake,
+        "#!/bin/sh\ncase \"$3\" in *2.0.0*) echo '{\"event\":\"result\",\"clean\":false,\"findings\":[{\"threat_name\":\"Test.Threat\"}],\"pack_errors\":[]}'; exit 1;; esac\necho '{\"event\":\"result\",\"clean\":true,\"findings\":[],\"pack_errors\":[]}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    // SAFETY: nothing else in this process reads or sets this variable.
+    unsafe { std::env::set_var("APPOFHOLDING_OYST_CLI", &fake) };
+
+    let old = installed(&e);
+    e.lib.set_scan_mode(ScanMode::Block).unwrap();
+    let http = github("2.0.0");
+    let err = apply(&e, &http, &ApplyOptions::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("oysterAV found Test.Threat") && err.contains("untouched"),
+        "{err}"
+    );
+    let app = e.lib.get("foo-app").unwrap();
+    assert_eq!(app.sha256, old.sha256, "the installed app was not touched");
+    assert!(e.lib.versions("foo-app").unwrap().is_empty());
+    assert!(
+        !e.lib
+            .dirs
+            .app_data_dir()
+            .join("downloads/foo-app/Foo-2.0.0-x86_64.AppImage")
+            .exists(),
+        "the flagged download is thrown away"
+    );
+
+    // `warn` installs it and keeps what oysterAV said, about this build only.
+    e.lib.set_scan_mode(ScanMode::Warn).unwrap();
+    assert!(matches!(
+        apply(&e, &http, &ApplyOptions::default()),
+        Ok(Applied::Updated { .. })
+    ));
+    let v = e.lib.scan_verdict("foo-app").unwrap().unwrap();
+    assert_eq!(
+        (v.state, v.detail.as_str()),
+        (ScanState::Threat, "Test.Threat")
+    );
+}

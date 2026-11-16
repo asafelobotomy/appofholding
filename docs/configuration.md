@@ -63,6 +63,7 @@ background timer all follow them:
 | policy | the update policy a newly found update source starts with; existing apps keep theirs | `notify` |
 | keep-versions | how many previous versions an update keeps for rollback (0–10); lowering it deletes the extra ones at once | `2` |
 | sandbox | the sandbox a newly added app starts in: `none`, `standard` or `strict` | `none` |
+| scan | whether [oysterAV](https://github.com/asafelobotomy/oysterAV) scans an AppImage as it is added or updated: `off`, `warn` (keep the answer, only report a threat) or `block` (also refuse to add or install one with a threat) | `off` |
 
 ```sh
 appofholding defaults show
@@ -80,12 +81,25 @@ appofholding config show                       # policy, keep_versions, sandbox,
 appofholding config set keep_versions 3
 appofholding config set schedule weekly        # off, hourly, daily or weekly
 appofholding config set policy auto --all      # also give every existing app this policy
+appofholding config set scan block             # scan with oysterAV; refuse an AppImage with a threat
 appofholding config reset sandbox              # back to the built-in value
 ```
 
 Every value is checked before anything is written, and `--json` prints
 `{"version": 1, "ok": true, "settings": {...}}`, or `{"version": 1, "ok": false, "error": "..."}`
 with exit status 1.
+
+## Scanning with oysterAV
+
+`appofholding scan <id>…` (or `--all`) has oysterAV (`oyst-cli scan <file> --ndjson`) look at the
+AppImages in the library and keeps each answer (`clean`, `threat` with the threat's name, or
+`error`) with the app, so `list --json`, the window and the uQ page show it. The exit status is 1
+when something was found. With the `scan` setting on `warn` or `block`, a file is scanned before
+it joins the library or replaces an installed version, so `block` can stop a threat before it is
+installed. An answer is about one build: after an update it is gone until the new file is
+scanned. oysterAV only looks; a flagged file is never moved or deleted by appOFholding, and
+oysterAV is where it is quarantined. If oysterAV is busy with another job, appOFholding asks
+again for a few minutes. `APPOFHOLDING_OYST_CLI` points at another `oyst-cli` (tests, odd installs).
 
 ## Updating appOFholding itself
 
