@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 - **The AppImages page in uQ Settings can now go back and add.** *Apps* has an **Add an
   AppImage from a link** row (a web link or `owner/repo`, never a path; it asks first), and each
