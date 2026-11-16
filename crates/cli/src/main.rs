@@ -26,6 +26,9 @@ use appofholding_core::{
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::json;
 
+mod pagejson;
+use pagejson::ConfigCmd;
+
 /// Manage AppImages: integrate them into the desktop, track their update sources, and launch them.
 #[derive(Parser)]
 #[command(name = "appofholding", version, about)]
@@ -80,6 +83,12 @@ enum Cmd {
         /// Also delete the app's private sandbox home (its settings and files). Cannot be undone.
         #[arg(long)]
         purge_data: bool,
+        /// Only show what would be removed.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable output: the plan with --dry-run, otherwise what was done.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect or change where an app gets its updates from.
     #[command(subcommand)]
@@ -96,6 +105,9 @@ enum Cmd {
         /// Also show the result as a desktop notification.
         #[arg(long)]
         notify: bool,
+        /// One JSON line per step as it happens (start, one per app, done), for progress bars.
+        #[arg(long, conflicts_with = "json")]
+        ndjson: bool,
     },
     /// Download and install newer versions (all apps with a source, or just ID).
     Update {
@@ -125,6 +137,16 @@ enum Cmd {
         /// With --from: leave the file where it is and install a copy.
         #[arg(long, requires = "from")]
         copy: bool,
+        /// Only show which updates would be installed (what the last check found).
+        #[arg(long, conflicts_with_all = ["scheduled", "from", "ndjson"])]
+        dry_run: bool,
+        /// With --dry-run: print the plan as JSON.
+        #[arg(long, requires = "dry_run")]
+        json: bool,
+        /// One JSON line per step as it happens (an app starts, its download percent, its
+        /// result, done), for progress bars.
+        #[arg(long, conflicts_with_all = ["scheduled", "from"])]
+        ndjson: bool,
     },
     /// List the previous versions kept for rollback.
     Versions { id: String },
@@ -150,6 +172,10 @@ enum Cmd {
     /// Show or change the settings that apply to every app.
     #[command(subcommand)]
     Defaults(DefaultsCmd),
+    /// Show or change every setting in one place: the defaults above plus the background check
+    /// schedule. The same list uQ Settings and the window show.
+    #[command(subcommand)]
+    Config(ConfigCmd),
     /// Check for a new release of appOFholding itself, and update it where that is possible.
     #[command(subcommand, name = "self")]
     SelfUpdate(SelfCmd),
@@ -1432,6 +1458,107 @@ fn defaults_cmd(cmd: DefaultsCmd) -> Result<()> {
     Ok(())
 }
 
+/// Runs a command whose `--json` answer is one object; a failure prints the error envelope and
+/// exits 1, so a caller that parses stdout whatever the exit code gets the reason.
+fn json_or_exit(r: Result<serde_json::Value>) {
+    match r {
+        Ok(v) => println!("{v}"),
+        Err(e) => {
+            pagejson::print_error(&e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `update --ndjson`: a line when an app starts, one per percent downloaded, one with its result,
+/// and a last one with the totals. Failures are results, not a non-zero exit, so the caller
+/// reads every line either way; the exit code is 1 only when something failed.
+fn update_ndjson(
+    lib: &Library,
+    http: &UreqHttp,
+    ids: &[String],
+    opts: &ApplyOptions,
+) -> Result<()> {
+    let (mut updated, mut failed) = (0, 0);
+    for (n, i) in ids.iter().enumerate() {
+        let name = lib.get(i).map(|a| a.name).unwrap_or_else(|_| i.clone());
+        pagejson::event(&json!({
+            "event": "start", "app": i, "name": name, "index": n + 1, "total": ids.len()
+        }));
+        let result = lib.update(http, i, opts, &mut pagejson::download_events(i.clone()));
+        let (outcome, mut extra) = match result {
+            Ok(Applied::Updated { from, to, delta }) => {
+                updated += 1;
+                ("updated", json!({ "from": from, "to": to, "delta": delta }))
+            }
+            Ok(Applied::NoUpdate(Status::Unknown)) => ("unknown", json!({})),
+            Ok(Applied::NoUpdate(_)) => ("current", json!({})),
+            Ok(Applied::Skipped(why)) => ("skipped", json!({ "message": why.to_string() })),
+            Ok(Applied::Deferred { version, pids }) => {
+                ("deferred", json!({ "to": version, "pids": pids }))
+            }
+            Err(e) => {
+                failed += 1;
+                ("failed", json!({ "message": e.to_string() }))
+            }
+        };
+        let obj = extra.as_object_mut().unwrap();
+        obj.insert("event".into(), "result".into());
+        obj.insert("app".into(), json!(i));
+        obj.insert("name".into(), json!(name));
+        obj.insert("outcome".into(), outcome.into());
+        pagejson::event(&extra);
+    }
+    pagejson::event(
+        &json!({ "event": "done", "updated": updated, "failed": failed, "total": ids.len() }),
+    );
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn config_cmd(cmd: ConfigCmd) -> Result<()> {
+    let json = cmd.json();
+    let exe = std::env::current_exe().context("cannot determine own path")?;
+    let lib = match library() {
+        Ok(l) => l,
+        Err(e) if json => {
+            pagejson::print_error(&e);
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e),
+    };
+    match cmd {
+        ConfigCmd::Show { json: true } => json_or_exit(pagejson::show_json(&lib)),
+        ConfigCmd::Show { json: false } => pagejson::show_text(&lib)?,
+        ConfigCmd::Set {
+            key,
+            value,
+            all,
+            json,
+        } => {
+            let r = pagejson::set(&lib, &exe, &key, &value, all);
+            if json {
+                json_or_exit(r);
+            } else {
+                r?;
+                println!("{key} is now {value}");
+            }
+        }
+        ConfigCmd::Reset { key, json } => {
+            let r = pagejson::reset(&lib, &exe, &key);
+            if json {
+                json_or_exit(r);
+            } else {
+                r?;
+                println!("{key} is back to its built-in value");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn schedule_cmd(cmd: ScheduleCmd) -> Result<()> {
     let dirs = dirs()?;
     match cmd {
@@ -1627,6 +1754,10 @@ fn list_json(apps: &[AppRecord], sources: &[SourceRecord]) -> serde_json::Value 
                 "version": a.version.clone().or(src.and_then(|s| s.installed_version.clone())),
                 "desktop_id": format!("{}.desktop", appofholding_core::paths::desktop_id(&a.id)),
                 "appimage": a.appimage_path.display().to_string(),
+                "size_bytes": a.size,
+                // The icon theme name of the menu entry's icon, when the app has one.
+                "icon": a.icon_file.as_ref().map(|_| appofholding_core::paths::desktop_id(&a.id)),
+                "external": a.external_file,
                 "has_source": src.is_some(),
                 "source": src.map(|s| s.source.describe()),
                 "policy": src.map(|s| s.policy.as_str()),
@@ -1913,8 +2044,9 @@ fn main() -> Result<()> {
             keep_file,
             delete_file,
             purge_data,
+            dry_run,
+            json,
         } => {
-            let lib = library()?;
             let policy = if delete_file {
                 FilePolicy::Delete
             } else if keep_file {
@@ -1922,23 +2054,62 @@ fn main() -> Result<()> {
             } else {
                 FilePolicy::Auto
             };
-            let rec = lib.remove_with(&id, policy)?;
-            println!("Removed {} ({})", rec.name, rec.id);
-            if rec.appimage_path.exists() {
-                println!(
-                    "The AppImage file was kept: {}",
-                    rec.appimage_path.display()
-                );
-            }
-            if purge_data {
-                if lib.purge_private_home(&id)? {
-                    println!("Deleted its private data folder.");
+            if dry_run {
+                let plan =
+                    library().and_then(|lib| pagejson::remove_plan(&lib, &id, policy, purge_data));
+                if json {
+                    json_or_exit(plan);
+                } else {
+                    let plan = plan?;
+                    println!("{}", plan["summary"].as_str().unwrap_or(""));
+                    for c in plan["changes"].as_array().into_iter().flatten() {
+                        println!(
+                            "  {:<14} {}",
+                            c["group"].as_str().unwrap_or(""),
+                            c["detail"].as_str().unwrap_or("")
+                        );
+                    }
                 }
-            } else if lib.dirs.private_home(&id).is_dir() {
-                println!(
-                    "Its private data folder was kept: {}\n(add --purge-data to delete it)",
-                    lib.dirs.private_home(&id).display()
-                );
+                return Ok(());
+            }
+            let done = (|| -> Result<serde_json::Value> {
+                let lib = library()?;
+                let rec = lib.remove_with(&id, policy)?;
+                let kept_file = rec
+                    .appimage_path
+                    .exists()
+                    .then(|| rec.appimage_path.display().to_string());
+                let home = lib.dirs.private_home(&id);
+                let purged = purge_data && lib.purge_private_home(&id)?;
+                let kept_data = !purged && home.is_dir();
+                if !json {
+                    println!("Removed {} ({})", rec.name, rec.id);
+                    if let Some(f) = &kept_file {
+                        println!("The AppImage file was kept: {f}");
+                    }
+                    if purged {
+                        println!("Deleted its private data folder.");
+                    } else if kept_data {
+                        println!(
+                            "Its private data folder was kept: {}\n(add --purge-data to delete it)",
+                            home.display()
+                        );
+                    }
+                }
+                Ok(json!({
+                    "version": 1,
+                    "ok": true,
+                    "id": rec.id,
+                    "name": rec.name,
+                    "kept_file": kept_file,
+                    "kept_data": kept_data,
+                    "purged_data": purged,
+                }))
+            })();
+            if json {
+                json_or_exit(done);
+            } else {
+                done?;
             }
         }
         Cmd::Sandbox(cmd) => sandbox_cmd(cmd)?,
@@ -2046,6 +2217,7 @@ fn main() -> Result<()> {
             desktop_id,
             json,
             notify,
+            ndjson,
         } => {
             let lib = library()?;
             let http = UreqHttp::new();
@@ -2057,6 +2229,32 @@ fn main() -> Result<()> {
                 Some(i) => vec![i],
                 None => lib.sources()?.into_iter().map(|s| s.app_id).collect(),
             };
+            if ndjson {
+                // A few apps at a time (as `check_many` does), a line after each batch.
+                pagejson::event(&json!({ "event": "start", "total": ids.len() }));
+                let mut updates = 0;
+                let mut done = 0;
+                for batch in ids.chunks(4) {
+                    let results = lib.check_many(&http, batch);
+                    let sources = lib.sources()?;
+                    for (i, result) in &results {
+                        let src = sources.iter().find(|s| &s.app_id == i);
+                        let row = check_row(i, result, src);
+                        updates += usize::from(row["update"] == true);
+                        done += 1;
+                        let mut ev =
+                            json!({ "event": "checked", "index": done, "total": ids.len() });
+                        ev.as_object_mut()
+                            .unwrap()
+                            .extend(row.as_object().cloned().unwrap_or_default());
+                        pagejson::event(&ev);
+                    }
+                }
+                pagejson::event(
+                    &json!({ "event": "done", "updates": updates, "total": ids.len() }),
+                );
+                return Ok(());
+            }
             let results = lib.check_many(&http, &ids);
             // Read after the check, so a pin or skip is as current as the answer.
             let sources = lib.sources()?;
@@ -2105,7 +2303,28 @@ fn main() -> Result<()> {
             keep,
             from,
             copy,
+            dry_run,
+            json,
+            ndjson,
         } => {
+            if dry_run {
+                let plan =
+                    library().and_then(|lib| pagejson::update_plan(&lib, id.as_deref(), force));
+                if json {
+                    json_or_exit(plan);
+                } else {
+                    let plan = plan?;
+                    println!("{}", plan["summary"].as_str().unwrap_or(""));
+                    for c in plan["changes"].as_array().into_iter().flatten() {
+                        println!(
+                            "  {:<24} {}",
+                            c["label"].as_str().unwrap_or(""),
+                            c["detail"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+                return Ok(());
+            }
             let lib = library()?;
             if let (Some(file), Some(id)) = (&from, &id) {
                 let found = lib.local_version_of(file)?;
@@ -2176,6 +2395,9 @@ fn main() -> Result<()> {
                 println!(
                     "No apps have an update source yet. Use `appofholding source set <id> <link>`."
                 );
+            }
+            if ndjson {
+                return update_ndjson(&lib, &http, &ids, &opts);
             }
             let mut failed = false;
             for i in ids {
@@ -2252,6 +2474,7 @@ fn main() -> Result<()> {
         }
         Cmd::Schedule(cmd) => schedule_cmd(cmd)?,
         Cmd::Defaults(cmd) => defaults_cmd(cmd)?,
+        Cmd::Config(cmd) => config_cmd(cmd)?,
         Cmd::Launch(cmd) => launch_cmd(cmd)?,
         Cmd::Run {
             profile,

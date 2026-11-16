@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0
+
+- **A new AppImages page in uQ Settings** (Apps → AppImages), laid out like uQ's own pages with
+  three tabs. *Overview*: how many updates there are, **Check for updates** and **Update all**
+  with a progress bar that follows each app, then the apps with an update and the ones that
+  need attention. *Apps*: every AppImage with its icon, version, size and status, its update
+  policy, Update, Skip this version, and Remove (asks first and lists everything it would
+  remove, with sizes). *Preferences*: background checks, previous versions kept, the policy and
+  sandbox new apps start with. Words and groups are the ones the window uses.
+- `appofholding config show|set|reset` reads and changes every setting in one place (the
+  update policy new sources start with, previous versions kept, the sandbox new apps start in,
+  the background check schedule), checking each value before it writes. `--json` for programs;
+  `defaults` and `schedule` keep working.
+- `appofholding remove ID --dry-run` and `update --dry-run` show what would change without
+  changing it; with `--json` they print a plan (`summary`, `changes`, `would_refuse`) that uQ
+  shows before asking. `remove --json` says what was done.
+- `check --ndjson` and `update --ndjson` print one JSON line per step (an app starts, its
+  download percent, its result, done), for progress bars. `list --json` adds each app's
+  `size_bytes`, `icon` and `external`.
+- The window's remove dialog says the versions kept for rollback go too.
+- Needs uQ with Settings page API 3 (uQ 0.3.0 and later); older uQ skips the page.
+
 ## 0.8.1
 
 - Radio buttons and check boxes are easy to read in the Gruvbox themes: the selected choice

@@ -1,92 +1,163 @@
-# appOFholding's page in uQ Settings (under Apps): the AppImage library, updating, each app's
-# update policy and the background check schedule. Installed to
+# appOFholding's page in uQ Settings (under Apps): the AppImage library, updating with progress,
+# each app's update policy and removal, and the settings every app shares. Installed to
 # /usr/share/uq/settings/pages/appimages/ by appOFholding's package; inert without uQ.
+# Everything it reads or changes goes through the `appofholding` command line; see uq/README.md.
 # Reference: docs/settings-pages.md in the uQ repository.
-uq_api = 1
+uq_api = 3
 id = "appimages"
 name = "AppImages"
 icon = "io.github.appofholding"
 category = "apps"
 qml = "Page.qml"
-keywords = ["appimage", "appofholding", "updates", "apps"]
+keywords = ["appimage", "appofholding", "updates", "apps", "sandbox", "library"]
+
+[[setting]]
+id = "updates"
+label = "AppImage updates"
+keywords = ["check", "upgrade", "update all", "available"]
 
 [[setting]]
 id = "apps"
 label = "AppImages in the library"
-keywords = ["list", "installed"]
-
-[[setting]]
-id = "update-all"
-label = "Update all AppImages"
-keywords = ["upgrade", "check"]
-
-[[setting]]
-id = "policy"
-label = "AppImage update policy"
-keywords = ["auto", "notify", "manual", "pinned"]
+keywords = ["list", "installed", "remove", "uninstall", "skip", "policy"]
 
 [[setting]]
 id = "schedule"
 label = "Background AppImage update checks"
-keywords = ["timer", "hourly", "daily", "weekly"]
+keywords = ["timer", "hourly", "daily", "weekly", "automatic"]
+
+[[setting]]
+id = "policy"
+label = "Update policy for new AppImages"
+keywords = ["auto", "notify", "manual", "pinned", "default"]
+
+[[setting]]
+id = "keep-versions"
+label = "Previous versions kept"
+keywords = ["rollback", "going back", "old versions"]
+
+[[setting]]
+id = "sandbox"
+label = "Sandbox for new AppImages"
+keywords = ["bubblewrap", "isolation", "standard", "strict"]
 
 [requires]
 bins = ["appofholding"]
 
-# The library with each app's policy and last known status (no network).
+# ---- reads. The library and the saved settings never touch the network.
 [[command]]
 id = "list"
 argv = ["/usr/bin/appofholding", "list", "--json"]
 output = "json"
-timeout_ms = 5000
+timeout_ms = 10000
+watch = { files = ["~/.local/share/appofholding/db.sqlite", "~/.local/share/appofholding/db.sqlite-wal"] }
 
-# Ask every app's update source now (network; results are also saved for `list`).
+[[command]]
+id = "config"
+argv = ["/usr/bin/appofholding", "config", "show", "--json"]
+output = "json"
+timeout_ms = 10000
+watch = { files = ["~/.local/share/appofholding/db.sqlite", "~/.local/share/appofholding/db.sqlite-wal", "~/.config/systemd/user/appofholding-update.timer"] }
+
+# ---- what an action would change: reads, so they don't ask. Same arguments as the action.
+[[command]]
+id = "preview-update-all"
+argv = ["/usr/bin/appofholding", "update", "--dry-run", "--json"]
+output = "json"
+timeout_ms = 10000
+
+[[command]]
+id = "preview-remove"
+argv = ["/usr/bin/appofholding", "remove", "--dry-run", "--json"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+[[command]]
+id = "preview-remove-data"
+argv = ["/usr/bin/appofholding", "remove", "--purge-data", "--dry-run", "--json"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+# ---- network: ask every update source now (results are also saved for `list`). Streamed: a
+# line as each app is checked. A source that fails is a line with `error`, not a failure.
 [[command]]
 id = "check"
-argv = ["/usr/bin/appofholding", "check", "--json"]
-output = "json"
-timeout_ms = 180000
+argv = ["/usr/bin/appofholding", "check", "--ndjson"]
+output = "ndjson"
+timeout_ms = 300000
 
-# Install every update found; an app that is running is left for later.
+# ---- updates. Streamed: a line as each app starts, its download percent and its result. An app
+# that is running is left for later. The version an update replaces is kept for rollback.
 [[command]]
 id = "update-all"
-argv = ["/usr/bin/appofholding", "update", "--defer-if-running"]
-output = "text"
+argv = ["/usr/bin/appofholding", "update", "--defer-if-running", "--ndjson"]
+output = "ndjson"
 timeout_ms = 600000
+confirm = "Install the updates found for your AppImages? The version each one replaces is kept so you can go back."
+preview = "preview-update-all"
 
 [[command]]
 id = "update"
-argv = ["/usr/bin/appofholding", "update", "--defer-if-running"]
-output = "text"
+argv = ["/usr/bin/appofholding", "update", "--defer-if-running", "--ndjson"]
+output = "ndjson"
 timeout_ms = 600000
 args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
 
+# ---- per-app settings
 [[command]]
 id = "policy"
 argv = ["/usr/bin/appofholding", "policy"]
 output = "text"
-timeout_ms = 5000
-args = [
-    { name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
-    { name = "policy", pattern = "^(auto|notify|manual|pinned)$" },
-]
+timeout_ms = 10000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }, { name = "policy", pattern = "^(auto|notify|manual|pinned)$" }]
 
 [[command]]
-id = "schedule-status"
-argv = ["/usr/bin/appofholding", "schedule", "status", "--json"]
+id = "skip"
+argv = ["/usr/bin/appofholding", "skip"]
+output = "text"
+timeout_ms = 10000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+[[command]]
+id = "unskip"
+argv = ["/usr/bin/appofholding", "skip", "--clear"]
+output = "text"
+timeout_ms = 10000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+
+# ---- removal. Each asks first, with the plan above; the page never passes --delete-file.
+[[command]]
+id = "remove"
+argv = ["/usr/bin/appofholding", "remove", "--json"]
 output = "json"
-timeout_ms = 5000
+timeout_ms = 60000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+confirm = "Remove %s? This removes its menu entry, and its AppImage file unless the file is yours."
+preview = "preview-remove"
 
 [[command]]
-id = "schedule-install"
-argv = ["/usr/bin/appofholding", "schedule", "install", "--interval"]
-output = "text"
-timeout_ms = 20000
-args = [{ name = "interval", pattern = "^(hourly|daily|weekly)$" }]
+id = "remove-data"
+argv = ["/usr/bin/appofholding", "remove", "--purge-data", "--json"]
+output = "json"
+timeout_ms = 60000
+args = [{ name = "app", pattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }]
+confirm = "Remove %s and delete its settings and files? This can't be undone."
+preview = "preview-remove-data"
+
+# ---- the settings every app shares: `appofholding config` checks each value before it writes.
+[[command]]
+id = "config-set"
+argv = ["/usr/bin/appofholding", "config", "set", "--json"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "key", pattern = "^(policy|keep_versions|sandbox|schedule)$" }, { name = "value", pattern = "^[a-z0-9]{1,16}$" }]
 
 [[command]]
-id = "schedule-remove"
-argv = ["/usr/bin/appofholding", "schedule", "remove"]
-output = "text"
-timeout_ms = 20000
-confirm = "Turn off background update checks for AppImages?"
+id = "config-policy-all"
+argv = ["/usr/bin/appofholding", "config", "set", "--all", "--json", "policy"]
+output = "json"
+timeout_ms = 30000
+args = [{ name = "policy", pattern = "^(auto|notify|manual|pinned)$" }]
+confirm = "Give every AppImage that has an update source the policy “%s”?"
