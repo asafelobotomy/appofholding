@@ -30,6 +30,18 @@ Kirigami.ApplicationWindow {
     // takes effect after a restart, but uQ's own theme is followed live.
     property string themeName: backend.theme()
     property var uqPalette: Util.parse(backend.uqPalette() || "null")
+    // Icons already on screen keep the shade of the icon theme they were loaded with, so when
+    // uQ's theme flips between light and dark the window starts afresh (once nothing is running
+    // and the window is showing) instead of showing dark icons on a dark background.
+    readonly property string iconVariant: uqPalette && uqPalette.variant ? uqPalette.variant : ""
+    property string loadedVariant: ""
+    function restartForIcons() {
+        if (iconVariant !== "" && loadedVariant !== "" && iconVariant !== loadedVariant
+                && visible && backend.tasks === 0) {
+            backend.restartSoon()
+            Qt.quit()
+        }
+    }
     // Colours for our own theme as seen by Kirigami (the style's controls use the application palette).
     readonly property var themePalette: Themes.palette(themeName, uqPalette)
     // Also reaches the dialogs, which live on the window rather than on a page.
@@ -143,6 +155,7 @@ Kirigami.ApplicationWindow {
         onTriggered: {
             var next = Util.parse(backend.uqPalette() || "null")
             if (JSON.stringify(next) !== JSON.stringify(root.uqPalette)) root.uqPalette = next
+            root.restartForIcons()
         }
     }
     Timer { id: firstCheck; interval: 2 * 60 * 1000; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
@@ -228,6 +241,7 @@ Kirigami.ApplicationWindow {
     }
 
     Component.onCompleted: {
+        loadedVariant = iconVariant
         reload()
         reloadDefaults()
         backend.listen()

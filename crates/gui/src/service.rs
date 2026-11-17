@@ -443,11 +443,11 @@ fn choice_save(dirs: &Dirs, file: &str, choices: &[&str], what: &str, name: &str
 
 /// The saved colour theme; anything missing or unrecognised means "uq".
 pub fn theme_load(dirs: &Dirs) -> String {
-    choice_load(dirs, "gui-theme", &THEMES)
+    choice_load(dirs, "gui-theme-2", &THEMES)
 }
 
 pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
-    choice_save(dirs, "gui-theme", &THEMES, "theme", name)
+    choice_save(dirs, "gui-theme-2", &THEMES, "theme", name)
 }
 
 /// Improvements worth suggesting for one app on this computer (see `core::suggest`).
@@ -1190,7 +1190,7 @@ mod tests {
         theme_save(&dirs, "gruvbox-light").unwrap();
         assert_eq!(theme_load(&dirs), "gruvbox-light");
         assert!(theme_save(&dirs, "../evil").is_err());
-        std::fs::write(gui_file(&dirs, "gui-theme"), "garbage").unwrap();
+        std::fs::write(gui_file(&dirs, "gui-theme-2"), "garbage").unwrap();
         assert_eq!(theme_load(&dirs), "uq");
     }
 

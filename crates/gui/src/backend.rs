@@ -122,6 +122,10 @@ pub mod qobject {
         #[cxx_name = "uqPalette"]
         #[qinvokable]
         fn uq_palette(self: &Backend) -> QString;
+        /// Start a fresh copy of this program a moment from now (the caller then quits).
+        #[cxx_name = "restartSoon"]
+        #[qinvokable]
+        fn restart_soon(self: &Backend);
         #[cxx_name = "setTheme"]
         #[qinvokable]
         fn set_theme(self: &Backend, name: &QString) -> QString;
@@ -397,6 +401,17 @@ impl qobject::Backend {
     }
     pub fn uq_palette(&self) -> QString {
         q(&apply_uq_palette().unwrap_or_default())
+    }
+    pub fn restart_soon(&self) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        // The running copy answers any new start by showing its window, so wait for it to be gone.
+        let _ = std::process::Command::new("sh")
+            .args(["-c", "sleep 1; exec \"$0\" \"$@\""])
+            .arg(exe)
+            .args(std::env::args_os().skip(1).filter(|a| a != service::TRAY_FLAG))
+            .spawn();
     }
     pub fn set_theme(&self, name: &QString) -> QString {
         unit(with_dirs(|d| service::theme_save(d, &s(name))))

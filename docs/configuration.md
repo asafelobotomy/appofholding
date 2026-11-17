@@ -122,7 +122,7 @@ The graphical app keeps a few settings of its own in `~/.config/appofholding/`:
 | File | Holds | Default |
 |---|---|---|
 | `gui-view` | library layout: `list`, `grid` or `compact` (saved as soon as you pick one) | `list` |
-| `gui-theme` | colour theme: `uq` (follows uQ's theme live, the desktop's without uQ), `system`, `gruvbox-dark` or `gruvbox-light` (a new choice applies at the next start) | `uq` |
+| `gui-theme-2` | colour theme: `uq` (follows uQ's theme live, the desktop's without uQ), `system`, `gruvbox-dark` or `gruvbox-light` (a new choice applies at the next start) | `uq` |
 | `gui-desktop.json` | tray icon, minimise/close to the tray, update notifications, start in the tray, what to do with a dropped AppImage (`ask`, `move`, `copy`, `in-place`) | tray off, notifications on, ask |
 
 **Launch at startup** is the XDG autostart entry `~/.config/autostart/io.github.appofholding.desktop`;

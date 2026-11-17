@@ -69,7 +69,6 @@ extern "C" bool appofholding_set_uq_palette(const char *json) {
     for (const QColor &x : {c.bg, c.bgAlt, c.bgActive, c.text, c.dim, c.accent, c.accentText, c.link, c.visited})
         if (!x.isValid())
             return false;
-    QGuiApplication::setPalette(make(c));
     const QString wanted = o.value(QLatin1String("icons")).toString();
     const bool light = o.value(QLatin1String("variant")).toString() == QLatin1String("light");
     // Use uQ's icon theme when it is installed here; otherwise Breeze in the matching shade.
@@ -77,6 +76,7 @@ extern "C" bool appofholding_set_uq_palette(const char *json) {
     if (!wanted.isEmpty())
         for (const QString &dir : QIcon::themeSearchPaths())
             found = found || QFile::exists(dir + QLatin1Char('/') + wanted + QStringLiteral("/index.theme"));
+    QGuiApplication::setPalette(make(c));
     QIcon::setThemeName(found ? wanted : light ? QStringLiteral("breeze") : QStringLiteral("breeze-dark"));
     return true;
 }
