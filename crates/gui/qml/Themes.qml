@@ -1,11 +1,11 @@
 pragma Singleton
 import QtQuick
 
-// Colour themes the user can pick. "system" follows the desktop. The Gruvbox palettes are also in
+// Colour themes the user can pick. "uq" (the default) follows uQ's theme, live; "system" follows the desktop. The Gruvbox palettes are also in
 // theme.cpp, which gives them to the style's controls; here they are for Kirigami. Gruvbox by Pavel Pertsev.
 QtObject {
-    readonly property var names: ["system", "gruvbox-dark", "gruvbox-light"]
-    readonly property var labels: [qsTr("Follow the system"), qsTr("Gruvbox dark"), qsTr("Gruvbox light")]
+    readonly property var names: ["uq", "system", "gruvbox-dark", "gruvbox-light"]
+    readonly property var labels: [qsTr("uQ theme"), qsTr("Follow the system"), qsTr("Gruvbox dark"), qsTr("Gruvbox light")]
 
     readonly property var gruvboxDark: ({
         bg: "#282828", bgAlt: "#3c3836", bgActive: "#504945", text: "#ebdbb2", dim: "#a89984",
@@ -18,8 +18,10 @@ QtObject {
         positive: "#79740e", neutral: "#af3a03", negative: "#9d0006"
     })
 
-    // The palette for a theme name, or null to follow the system.
-    function palette(name) {
+    // The palette for a theme name, or null to follow the system. `uq` is uQ's current palette
+    // (null without uQ's theme, which also follows the desktop).
+    function palette(name, uq) {
+        if (name === "uq") return uq || null
         return name === "gruvbox-dark" ? gruvboxDark : name === "gruvbox-light" ? gruvboxLight : null
     }
 }

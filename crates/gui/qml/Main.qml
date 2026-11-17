@@ -26,10 +26,12 @@ Kirigami.ApplicationWindow {
     property var selfInfo: null
     readonly property bool working: backend.tasks > 0
     readonly property alias backendObject: backend
-    // The chosen colour theme ("system" follows the desktop); changing it takes effect after a restart.
+    // The chosen colour theme ("uq" follows uQ's, "system" the desktop's); changing the choice
+    // takes effect after a restart, but uQ's own theme is followed live.
     property string themeName: backend.theme()
+    property var uqPalette: Util.parse(backend.uqPalette() || "null")
     // Colours for our own theme as seen by Kirigami (the style's controls use the application palette).
-    readonly property var themePalette: Themes.palette(themeName)
+    readonly property var themePalette: Themes.palette(themeName, uqPalette)
     // Also reaches the dialogs, which live on the window rather than on a page.
     readonly property ThemeBindings themeBindings: ThemeBindings { target: root; p: root.themePalette }
 
@@ -135,6 +137,14 @@ Kirigami.ApplicationWindow {
         backend.start("notifyCheck", "", "", "", "")
     }
 
+    // uQ rewrites its theme file when the theme changes; look for that once a second.
+    Timer {
+        interval: 1000; repeat: true; running: root.themeName === "uq"
+        onTriggered: {
+            var next = Util.parse(backend.uqPalette() || "null")
+            if (JSON.stringify(next) !== JSON.stringify(root.uqPalette)) root.uqPalette = next
+        }
+    }
     Timer { id: firstCheck; interval: 2 * 60 * 1000; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
     Timer { interval: 3 * 3600 * 1000; repeat: true; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
     Timer { id: retryCheck; interval: 5 * 60 * 1000; onTriggered: if (root.watchUpdates) root.backgroundCheck() }
