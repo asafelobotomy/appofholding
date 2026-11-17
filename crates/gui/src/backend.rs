@@ -410,7 +410,11 @@ impl qobject::Backend {
         let _ = std::process::Command::new("sh")
             .args(["-c", "sleep 1; exec \"$0\" \"$@\""])
             .arg(exe)
-            .args(std::env::args_os().skip(1).filter(|a| a != service::TRAY_FLAG))
+            .args(
+                std::env::args_os()
+                    .skip(1)
+                    .filter(|a| a != service::TRAY_FLAG),
+            )
             .spawn();
     }
     pub fn set_theme(&self, name: &QString) -> QString {

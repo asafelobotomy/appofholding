@@ -6,7 +6,15 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-const REQUIRED: [&str; 7] = ["bg", "surface", "overlay", "text", "text_muted", "accent", "accent_text"];
+const REQUIRED: [&str; 7] = [
+    "bg",
+    "surface",
+    "overlay",
+    "text",
+    "text_muted",
+    "accent",
+    "accent_text",
+];
 
 pub fn tokens_path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("APPOFHOLDING_UQ_TOKENS") {
@@ -24,7 +32,11 @@ pub fn tokens_path() -> Option<PathBuf> {
 pub fn palette_from(text: &str) -> Option<Value> {
     let v: Value = serde_json::from_str(text).ok()?;
     let c = v.get("colors")?;
-    let get = |k: &str| c.get(k).and_then(Value::as_str).filter(|s| s.starts_with('#'));
+    let get = |k: &str| {
+        c.get(k)
+            .and_then(Value::as_str)
+            .filter(|s| s.starts_with('#'))
+    };
     if REQUIRED.iter().any(|k| get(k).is_none()) {
         return None;
     }
