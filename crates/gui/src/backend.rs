@@ -114,9 +114,18 @@ pub mod qobject {
         fn launch(self: &Backend, id: &QString) -> QString;
         #[qinvokable]
         fn remove(self: &Backend, id: &QString, purge: bool) -> QString;
-        /// The saved colour theme: system, gruvbox-dark or gruvbox-light.
+        /// The saved colour theme: uq, system, gruvbox-dark or gruvbox-light.
         #[qinvokable]
         fn theme(self: &Backend) -> QString;
+        /// uQ's current palette as JSON (applied to the application too when it changed since
+        /// the last call), or an empty string when uQ's theme is not there.
+        #[cxx_name = "uqPalette"]
+        #[qinvokable]
+        fn uq_palette(self: &Backend) -> QString;
+        /// Start a fresh copy of this program a moment from now (the caller then quits).
+        #[cxx_name = "restartSoon"]
+        #[qinvokable]
+        fn restart_soon(self: &Backend);
         #[cxx_name = "setTheme"]
         #[qinvokable]
         fn set_theme(self: &Backend, name: &QString) -> QString;
@@ -390,6 +399,24 @@ impl qobject::Backend {
     pub fn theme(&self) -> QString {
         q(&current_theme())
     }
+    pub fn uq_palette(&self) -> QString {
+        q(&apply_uq_palette().unwrap_or_default())
+    }
+    pub fn restart_soon(&self) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        // The running copy answers any new start by showing its window, so wait for it to be gone.
+        let _ = std::process::Command::new("sh")
+            .args(["-c", "sleep 1; exec \"$0\" \"$@\""])
+            .arg(exe)
+            .args(
+                std::env::args_os()
+                    .skip(1)
+                    .filter(|a| a != service::TRAY_FLAG),
+            )
+            .spawn();
+    }
     pub fn set_theme(&self, name: &QString) -> QString {
         unit(with_dirs(|d| service::theme_save(d, &s(name))))
     }
@@ -634,5 +661,26 @@ pub fn started_in_tray() -> bool {
 pub fn current_theme() -> String {
     appofholding_core::Dirs::detect()
         .map(|d| service::theme_load(&d))
-        .unwrap_or_else(|_| "system".into())
+        .unwrap_or_else(|_| "uq".into())
+}
+
+thread_local! {
+    static LAST_UQ: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Read uQ's tokens and, when they differ from the last ones applied, put them on the
+/// application palette. Returns the palette JSON, or `None` without uQ's theme.
+pub fn apply_uq_palette() -> Option<String> {
+    let json = crate::uqtheme::load()?.to_string();
+    LAST_UQ.with(|last| {
+        if *last.borrow() != json {
+            let c = std::ffi::CString::new(json.clone()).ok()?;
+            // SAFETY: plain C function defined in theme.cpp; the application object exists.
+            if !unsafe { crate::appofholding_set_uq_palette(c.as_ptr()) } {
+                return None;
+            }
+            *last.borrow_mut() = json.clone();
+        }
+        Some(json)
+    })
 }

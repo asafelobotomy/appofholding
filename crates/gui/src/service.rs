@@ -414,8 +414,9 @@ pub fn remove_app(lib: &Library, id: &str, purge: bool) -> Res<()> {
     Ok(())
 }
 
-/// Colour themes the interface offers; the first is "follow the desktop".
-pub const THEMES: [&str; 3] = ["system", "gruvbox-dark", "gruvbox-light"];
+/// Colour themes the interface offers; the first, uQ's own, is the default and follows the
+/// desktop's palette when uQ's theme is not there.
+pub const THEMES: [&str; 4] = ["uq", "system", "gruvbox-dark", "gruvbox-light"];
 
 /// A one-word interface setting kept in `~/.config/appofholding/<file>`, one of `choices`.
 fn gui_file(dirs: &Dirs, file: &str) -> PathBuf {
@@ -440,13 +441,13 @@ fn choice_save(dirs: &Dirs, file: &str, choices: &[&str], what: &str, name: &str
     std::fs::write(f, format!("{name}\n")).map_err(e)
 }
 
-/// The saved colour theme; anything missing or unrecognised means "system".
+/// The saved colour theme; anything missing or unrecognised means "uq".
 pub fn theme_load(dirs: &Dirs) -> String {
-    choice_load(dirs, "gui-theme", &THEMES)
+    choice_load(dirs, "gui-theme-2", &THEMES)
 }
 
 pub fn theme_save(dirs: &Dirs, name: &str) -> Res<()> {
-    choice_save(dirs, "gui-theme", &THEMES, "theme", name)
+    choice_save(dirs, "gui-theme-2", &THEMES, "theme", name)
 }
 
 /// Improvements worth suggesting for one app on this computer (see `core::suggest`).
@@ -1185,12 +1186,12 @@ mod tests {
     fn the_theme_choice_is_saved_and_validated() {
         let tmp = tempfile::tempdir().unwrap();
         let dirs = Dirs::with_root(tmp.path());
-        assert_eq!(theme_load(&dirs), "system");
+        assert_eq!(theme_load(&dirs), "uq");
         theme_save(&dirs, "gruvbox-light").unwrap();
         assert_eq!(theme_load(&dirs), "gruvbox-light");
         assert!(theme_save(&dirs, "../evil").is_err());
-        std::fs::write(gui_file(&dirs, "gui-theme"), "garbage").unwrap();
-        assert_eq!(theme_load(&dirs), "system");
+        std::fs::write(gui_file(&dirs, "gui-theme-2"), "garbage").unwrap();
+        assert_eq!(theme_load(&dirs), "uq");
     }
 
     #[test]

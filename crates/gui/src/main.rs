@@ -1,11 +1,13 @@
 mod backend;
 mod instance;
 mod service;
+mod uqtheme;
 
 use cxx_qt_lib::{QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 
 unsafe extern "C" {
     fn appofholding_set_palette(which: i32);
+    fn appofholding_set_uq_palette(json: *const std::ffi::c_char) -> bool;
     fn appofholding_app_new(argc: i32, argv: *mut *mut std::ffi::c_char);
     fn appofholding_app_exec() -> i32;
 }
@@ -28,7 +30,11 @@ fn create_application() {
 /// Our own colour themes replace the application palette; "system" leaves the desktop's alone.
 /// Needs the application to exist, and has to happen before the interface is loaded.
 fn apply_theme() -> bool {
-    let which = match backend::current_theme().as_str() {
+    let name = backend::current_theme();
+    if name == "uq" {
+        return backend::apply_uq_palette().is_some();
+    }
+    let which = match name.as_str() {
         "gruvbox-dark" => 1,
         "gruvbox-light" => 2,
         _ => return false,

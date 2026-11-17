@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **appOFholding follows uQ's theme.** The new default colour theme, *uQ theme*, reads
+  `~/.local/state/uq/theme/tokens.json` (colours and icon theme) and re-reads it while the window
+  is open, so changing the theme in uQ changes appOFholding at once. Without uQ's theme it
+  follows the desktop as before. *Follow the system* and the Gruvbox themes are still in
+  Settings. The choice is now kept in `gui-theme-2`, so everyone starts on the uQ theme once and
+  can pick another again. When uQ's theme flips between light and dark, the window restarts
+  itself once nothing is running, so the icons change shade too.
+
 ## 0.11.0
 
 - **The AppImages page in uQ Settings can now go back and add.** *Apps* has an **Add an
