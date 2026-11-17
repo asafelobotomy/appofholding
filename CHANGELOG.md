@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 - **appOFholding follows uQ's theme.** The new default colour theme, *uQ theme*, reads
   `~/.local/state/uq/theme/tokens.json` (colours and icon theme) and re-reads it while the window
