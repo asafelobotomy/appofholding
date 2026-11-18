@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.1
+
 - **Less idle work in the tray.** The check for a changed uQ theme runs only while the window is showing, and once when it is shown again, instead of every second while hidden.
 
 ## 0.12.0
