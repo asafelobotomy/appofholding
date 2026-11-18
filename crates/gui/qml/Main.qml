@@ -149,15 +149,18 @@ Kirigami.ApplicationWindow {
         backend.start("notifyCheck", "", "", "", "")
     }
 
-    // uQ rewrites its theme file when the theme changes; look for that once a second.
-    Timer {
-        interval: 1000; repeat: true; running: root.themeName === "uq"
-        onTriggered: {
-            var next = Util.parse(backend.uqPalette() || "null")
-            if (JSON.stringify(next) !== JSON.stringify(root.uqPalette)) root.uqPalette = next
-            root.restartForIcons()
-        }
+    // uQ rewrites its theme file when the theme changes; look for that once a second while the
+    // window is showing, and once when it comes back (a tray app sits hidden almost all the time).
+    function checkUqTheme() {
+        var next = Util.parse(backend.uqPalette() || "null")
+        if (JSON.stringify(next) !== JSON.stringify(root.uqPalette)) root.uqPalette = next
+        root.restartForIcons()
     }
+    Timer {
+        interval: 1000; repeat: true; running: root.themeName === "uq" && root.visible
+        onTriggered: root.checkUqTheme()
+    }
+    onVisibleChanged: if (visible && themeName === "uq") checkUqTheme()
     Timer { id: firstCheck; interval: 2 * 60 * 1000; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
     Timer { interval: 3 * 3600 * 1000; repeat: true; running: root.watchUpdates; onTriggered: root.backgroundCheck() }
     Timer { id: retryCheck; interval: 5 * 60 * 1000; onTriggered: if (root.watchUpdates) root.backgroundCheck() }
