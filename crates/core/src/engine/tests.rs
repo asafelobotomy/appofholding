@@ -116,6 +116,44 @@ fn an_update_never_overwrites_a_file_that_is_not_this_apps() {
 }
 
 #[test]
+fn an_update_that_renames_the_file_repoints_other_launchers_at_it() {
+    let e = env();
+    let old = installed(&e);
+    let old_path = old.appimage_path.display().to_string();
+    // The app wrote its own URL handler and autostart entry using the file's path.
+    let handler = e
+        .lib
+        .dirs
+        .applications_dir()
+        .join("foo-url-handler.desktop");
+    let autostart = e.lib.dirs.config_home.join("autostart/foo.desktop");
+    fs::create_dir_all(autostart.parent().unwrap()).unwrap();
+    fs::write(
+        &handler,
+        format!("[Desktop Entry]\nExec=\"{old_path}\" %u\n"),
+    )
+    .unwrap();
+    fs::write(&autostart, format!("[Desktop Entry]\nExec={old_path}\n")).unwrap();
+    apply(&e, &github("2.0.0"), &ApplyOptions::default()).unwrap();
+    let new_path = e
+        .lib
+        .get("foo-app")
+        .unwrap()
+        .appimage_path
+        .display()
+        .to_string();
+    assert_ne!(new_path, old_path);
+    assert_eq!(
+        fs::read_to_string(&handler).unwrap(),
+        format!("[Desktop Entry]\nExec=\"{new_path}\" %u\n")
+    );
+    assert_eq!(
+        fs::read_to_string(&autostart).unwrap(),
+        format!("[Desktop Entry]\nExec={new_path}\n")
+    );
+}
+
+#[test]
 fn two_updates_of_the_same_app_cannot_run_at_once() {
     let e = env();
     installed(&e);

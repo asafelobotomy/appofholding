@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.12.2
+
+- **Updates no longer break other launchers for the app.** When an update gives an AppImage a new file name (`Foo-1.0.0.AppImage` to `Foo-2.0.0.AppImage`), menu entries, URL handlers and autostart entries that the app wrote for itself now follow the new name. Before, they kept pointing at the deleted file and nothing started at login. Rolling back follows the same way.
+
 ## 0.12.1
 
 - **Less idle work in the tray.** The check for a changed uQ theme runs only while the window is showing, and once when it is shown again, instead of every second while hidden.

@@ -24,6 +24,7 @@ use crate::updates::now;
 use crate::version::{Installed, Status};
 mod apply;
 mod local;
+mod retarget;
 mod schedule;
 pub use local::{LocalVersion, Relation};
 
