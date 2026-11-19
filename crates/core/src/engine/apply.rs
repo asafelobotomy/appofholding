@@ -176,6 +176,8 @@ impl Library {
         };
         if &dest != cur {
             let _ = fs::remove_file(cur);
+            // Other programs' launchers that started the old file now start the new one.
+            self.retarget_launchers(&app.id, cur, &dest);
         }
         if let (Some(old), new) = (&app.icon_file, &rec.icon_file)
             && Some(old) != new.as_ref()
