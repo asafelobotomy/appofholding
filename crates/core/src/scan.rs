@@ -300,9 +300,11 @@ mod tests {
 
     #[test]
     fn a_missing_scanner_or_file_is_an_error_not_a_panic() {
+        // A file that is always there, also in a clean build chroot (no /etc/hostname).
+        let present = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         let (s, d) = scan_with(
             Path::new("/nonexistent/oyst-cli"),
-            Path::new("/etc/hostname"),
+            &present,
             Duration::ZERO,
             1,
         );
