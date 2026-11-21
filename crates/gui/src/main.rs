@@ -2,6 +2,9 @@ mod backend;
 mod instance;
 mod service;
 mod uqtheme;
+#[allow(dead_code)] // vendored whole; this app uses part of it
+#[rustfmt::skip]
+mod uq_theme;
 
 use cxx_qt_lib::{QQmlApplicationEngine, QQuickStyle, QString, QUrl};
 

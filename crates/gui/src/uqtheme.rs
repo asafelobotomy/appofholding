@@ -16,15 +16,9 @@ const REQUIRED: [&str; 7] = [
     "accent_text",
 ];
 
+/// `$APPOFHOLDING_UQ_TOKENS`, else uQ's tokens file (see the vendored `uq_theme.rs`).
 pub fn tokens_path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("APPOFHOLDING_UQ_TOKENS") {
-        return Some(PathBuf::from(p));
-    }
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(state.join("uq/theme/tokens.json"))
+    crate::uq_theme::tokens_path("APPOFHOLDING_UQ_TOKENS")
 }
 
 /// The palette (same keys as `Themes.qml`, plus `variant` and `icons`) for tokens JSON text, or

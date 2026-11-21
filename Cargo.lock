@@ -104,6 +104,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "hex",
+ "libc",
  "serde_json",
  "sha2",
  "tempfile",
