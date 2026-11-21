@@ -1,7 +1,7 @@
 # A DRAFT spec: package names follow Fedora conventions but have not been checked on Fedora.
 # Build from a prepared source tree with:  rpmbuild -bb --build-in-place packaging/rpm/appofholding.spec
 Name:           appofholding
-Version:        0.12.2
+Version:        0.12.3
 Release:        1%{?dist}
 Summary:        AppImage manager with updates, launch options and sandboxing
 License:        GPL-3.0-or-later
@@ -47,6 +47,9 @@ make install PREFIX=%{_prefix} DESTDIR=%{buildroot} PROFILE=release
 %{_datadir}/uq/
 
 %changelog
+* Sat Nov 21 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.12.3-1
+- Follow the uQ palette with a file watch instead of a once-a-second check
+
 * Thu Nov 19 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.12.2-1
 - Keep other launchers for an app working when an update renames its file
 

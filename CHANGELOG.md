@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.3
 
 - **Less idle work:** the window no longer checks uQ's palette once a second while it is showing. uQ's shared uq-theme module (`crates/gui/src/uq_theme.rs`) watches the theme file and the window re-themes when it changes, shown or hidden.
 
