@@ -123,6 +123,11 @@ pub mod qobject {
         #[qinvokable]
         fn uq_palette(self: &Backend) -> QString;
         /// Start a fresh copy of this program a moment from now (the caller then quits).
+        /// Follow uQ's tokens file (a file watch on its own thread, started once); each change
+        /// arrives as `uqThemeChanged`.
+        #[cxx_name = "followUqTheme"]
+        #[qinvokable]
+        fn follow_uq_theme(self: Pin<&mut Backend>);
         #[cxx_name = "restartSoon"]
         #[qinvokable]
         fn restart_soon(self: &Backend);
@@ -175,6 +180,10 @@ pub mod qobject {
             ok: bool,
             payload: &QString,
         );
+        /// uQ's theme changed: call `uqPalette` for the new one.
+        #[qsignal]
+        #[cxx_name = "uqThemeChanged"]
+        fn uq_theme_changed(self: Pin<&mut Backend>);
         #[qsignal]
         fn progress(self: Pin<&mut Backend>, id: &QString, fraction: f64);
         /// Another start of the program handed over: files is a JSON array of AppImages to add,
@@ -298,6 +307,18 @@ impl qobject::Backend {
             let v: Value = serde_json::from_str(&s(json)).map_err(|e| e.to_string())?;
             with_dirs(|d| service::desktop_save(d, &v, &service::gui_exe()?))
         })())
+    }
+    pub fn follow_uq_theme(self: Pin<&mut Self>) {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let thread = self.qt_thread();
+        crate::uq_theme::watch(crate::uqtheme::tokens_path(), move |_| {
+            thread
+                .queue(|mut qobj: Pin<&mut qobject::Backend>| qobj.as_mut().uq_theme_changed())
+                .is_ok()
+        });
     }
     pub fn listen(self: Pin<&mut Self>) {
         self.answer_later_starts();
