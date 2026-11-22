@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.4
+
+- **Problems are reported to uQ.** A crash in appOFholding leaves a crash record that uQ lists on Settings › Problems. When uQ's launcher runs or updates an AppImage and it fails, the failure is logged as `[APPOFHOLDING-002]` with its level, so `uqctl log` and the Problems page show it and `uqctl explain` says what to do. The codes are listed in `/usr/share/uq/diag/appofholding.toml`. This uses uQ's `uq-diag` 1.0.1, vendored in `crates/core/src/uq_diag.rs` and pinned in CI.
+
 ## 0.12.3
 
 - **Less idle work:** the window no longer checks uQ's palette once a second while it is showing. uQ's shared uq-theme module (`crates/gui/src/uq_theme.rs`) watches the theme file and the window re-themes when it changes, shown or hidden.

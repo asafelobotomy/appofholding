@@ -33,6 +33,7 @@ pub mod selfupdate;
 pub mod source;
 pub mod suggest;
 pub mod updates;
+pub mod uq_diag;
 pub mod version;
 
 pub use db::{AppRecord, SourceRecord};

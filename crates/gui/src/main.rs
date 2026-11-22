@@ -71,7 +71,7 @@ fn forward_cli_commands() {
         &args[..]
     };
     let err = std::process::Command::new(cli).args(rest).exec();
-    eprintln!("appofholding-gui: could not start the command-line tool: {err}");
+    eprintln!("appofholding-gui: [APPOFHOLDING-001] could not start the command-line tool: {err}");
     std::process::exit(127);
 }
 
@@ -92,6 +92,7 @@ fn hand_over_to_running_copy() {
 }
 
 fn main() {
+    appofholding_core::uq_diag::install_panic_hook("appofholding-gui");
     forward_cli_commands();
     hand_over_to_running_copy();
     create_application();
