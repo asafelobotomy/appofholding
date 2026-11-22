@@ -20,6 +20,9 @@ sha1 = "0.11.0"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
 toml = "1.2.0"
+# uQ's crash records and log format (the vendored uq_diag.rs, uQ's native/uq-diag).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "std"] }
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 
 [dev-dependencies]

@@ -1942,7 +1942,23 @@ fn library() -> Result<Library> {
     )?)
 }
 
+/// Under systemd (uQ's launcher starts `appofholding run`), a failure is logged with its code
+/// and level for uQ's Settings › Problems; in a terminal it prints as before. A panic leaves a
+/// crash record either way.
 fn main() -> Result<()> {
+    use appofholding_core::uq_diag::{Style, install_panic_hook};
+    install_panic_hook("appofholding");
+    let r = run();
+    if let Err(e) = &r
+        && Style::detect() == Style::Journal
+    {
+        eprintln!("<3>appofholding: [APPOFHOLDING-002] {e:#}");
+        std::process::exit(1);
+    }
+    r
+}
+
+fn run() -> Result<()> {
     match Cli::parse().command {
         Cmd::Add {
             target,

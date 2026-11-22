@@ -1,0 +1,18 @@
+# appOFholding's problem codes for uQ (`uqctl log`, `uqctl explain`, Settings › Problems). Installed
+# as /usr/share/uq/diag/appofholding.toml. A code never changes meaning: set `retired = true` on one
+# nothing logs any more, and give a new problem the next number.
+app = "appOFholding"
+
+[[code]]
+id = "APPOFHOLDING-001"
+severity = "error"
+title = "appOFholding's window couldn't hand over to its command"
+means = "The appOFholding window was asked to run or update an AppImage, but couldn't start the appofholding command to do it, so nothing happened."
+fix = "Reinstall appOFholding: /usr/bin/appofholding should sit next to appofholding-gui."
+
+[[code]]
+id = "APPOFHOLDING-002"
+severity = "error"
+title = "An AppImage couldn't be run or updated"
+means = "appOFholding was started from uQ (the launcher or a widget) and the command failed: the message says why, such as an AppImage that is missing, couldn't be unpacked or was refused by its sandbox."
+fix = "Open appOFholding and check that app, or run the same `appofholding` command in a terminal to see the full message."
