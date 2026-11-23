@@ -1,7 +1,7 @@
 # A DRAFT spec: package names follow Fedora conventions but have not been checked on Fedora.
 # Build from a prepared source tree with:  rpmbuild -bb --build-in-place packaging/rpm/appofholding.spec
 Name:           appofholding
-Version:        0.12.4
+Version:        0.12.5
 Release:        1%{?dist}
 Summary:        AppImage manager with updates, launch options and sandboxing
 License:        GPL-3.0-or-later
@@ -47,6 +47,9 @@ make install PREFIX=%{_prefix} DESTDIR=%{buildroot} PROFILE=release
 %{_datadir}/uq/
 
 %changelog
+* Sun Nov 22 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.12.5-1
+- uQ's uq-theme 1.1.0 and one check for uQ's kits
+
 * Sun Nov 22 2026 asafelobotomy <213836723+asafelobotomy@users.noreply.github.com> - 0.12.4-1
 - Crash records and problem codes for uQ's Settings > Problems
 

@@ -32,11 +32,8 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      # the vendored uq-theme (uQ's native/uq-theme) is exactly the pinned release
-      - run: scripts/check-uq-theme.sh 1.0.0 crates/gui/src/uq_theme.rs
-      # the vendored uq-diag is uQ's release, and the logged problem codes match uq/diag/appofholding.toml
-      - run: scripts/check-uq-diag.sh 1.0.1 crates/core/src/uq_diag.rs
-      - run: scripts/check-diag-codes.sh uq/diag/appofholding.toml crates
+      # uQ's kits (uq/native.toml) are the pinned releases, and the logged problem codes match uq/diag/appofholding.toml
+      - run: scripts/check-uq-native.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --locked -p appofholding-core -p appofholding --all-targets -- -D warnings
       - run: cargo test --locked -p appofholding-core -p appofholding
@@ -67,7 +64,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # The uQ release whose `uqctl` checks the page (uq_api 3 is in every release since v0.3.0).
-      UQ_TAG: v0.3.35
+      UQ_TAG: v0.3.37
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Qt Quick and qmltestrunner

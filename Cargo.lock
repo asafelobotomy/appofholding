@@ -75,7 +75,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "appofholding"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "anyhow",
  "appofholding-core",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "appofholding-core"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "backhand",
  "hex",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "appofholding-gui"
-version = "0.12.4"
+version = "0.12.5"
 dependencies = [
  "appofholding-core",
  "cxx",
