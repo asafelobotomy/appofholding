@@ -105,6 +105,12 @@ fn main() {
             .qml_files(
                 [
                     "qml/Main.qml",
+                    "qml/TrayIcon.qml",
+                    "qml/DropOverlay.qml",
+                    "qml/UpdateFromFileDialog.qml",
+                    "qml/PlaceDialog.qml",
+                    "qml/SelfUpdateDialog.qml",
+                    "qml/RestartDialog.qml",
                     "qml/Radio.qml",
                     "qml/Check.qml",
                     "qml/AppsPage.qml",
@@ -117,6 +123,8 @@ fn main() {
                     "qml/AddDialog.qml",
                     "qml/ImportDialog.qml",
                     "qml/SettingsPage.qml",
+                    "qml/UpdatesTab.qml",
+                    "qml/DefaultsTab.qml",
                     "qml/Section.qml",
                     "qml/Pill.qml",
                     "qml/PrimaryButton.qml",

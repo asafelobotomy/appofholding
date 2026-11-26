@@ -47,33 +47,33 @@ fn the_taskbar_can_match_windows_to_the_renamed_entry() {
         "{text}"
     );
 }
-use crate::fixture::{self, Item};
 
-struct Env {
-    _tmp: tempfile::TempDir,
-    root: PathBuf,
-    lib: Library,
-}
-
-fn env() -> Env {
-    let tmp = tempfile::tempdir().unwrap();
-    // A path with a space exercises Exec quoting.
-    let root = tmp.path().join("my root");
-    fs::create_dir_all(&root).unwrap();
-    let lib = Library::open(Dirs::with_root(&root), root.join("bin/appofholding")).unwrap();
-    Env {
-        _tmp: tmp,
-        root,
-        lib,
-    }
-}
-
-fn write_image(env: &Env, file: &str, bytes: Vec<u8>) -> PathBuf {
-    let dir = env.root.join("downloads");
-    fs::create_dir_all(&dir).unwrap();
-    let p = dir.join(file);
-    fs::write(&p, bytes).unwrap();
-    p
+#[test]
+fn the_version_falls_back_to_the_newest_appstream_release() {
+    let e = env();
+    let desktop = b"[Desktop Entry]\nType=Application\nName=Bar\nExec=bar\nIcon=icon\n".to_vec();
+    let metainfo = br#"<component><id>io.github.o.bar.desktop</id>
+        <releases><release version="0.4.1" date="2026-06-17"/><release version="0.4.2" date="2026-10-02"/></releases>
+        </component>"#
+        .to_vec();
+    let p = write_image(
+        &e,
+        "Bar.AppImage",
+        fixture::build_appimage(
+            None,
+            vec![
+                Item::File("/io.github.o.bar.desktop", desktop),
+                Item::File("/icon.png", fixture::png(64)),
+                Item::File("/usr/share/metainfo/io.github.o.bar.appdata.xml", metainfo),
+                // Another component's file does not count.
+                Item::File(
+                    "/usr/share/metainfo/plugin.metainfo.xml",
+                    br#"<component><id>plugin</id><releases><release version="9.0"/></releases></component>"#.to_vec(),
+                ),
+            ],
+        ),
+    );
+    assert_eq!(inspect(&p).unwrap().version.as_deref(), Some("0.4.2"));
 }
 
 #[test]
@@ -197,6 +197,22 @@ fn remove_can_keep_the_appimage() {
 }
 
 #[test]
+fn remove_deletes_kept_previous_versions() {
+    let e = env();
+    let p = write_image(
+        &e,
+        "Foo.AppImage",
+        fixture::simple_appimage("Foo App", None),
+    );
+    e.lib.add(&p, &AddOptions::default()).unwrap();
+    let versions = e.lib.dirs.versions_dir("foo-app");
+    fs::create_dir_all(&versions).unwrap();
+    fs::write(versions.join("Foo-1.0.AppImage"), b"old").unwrap();
+    e.lib.remove("foo-app", false).unwrap();
+    assert!(!versions.exists());
+}
+
+#[test]
 fn move_mode_removes_the_original() {
     let e = env();
     let p = write_image(
@@ -301,156 +317,4 @@ fn rejects_appimage_without_desktop_entry() {
     let bytes = fixture::build_appimage(None, vec![Item::File("/AppRun", b"x".to_vec())]);
     let p = write_image(&e, "nodesk.AppImage", bytes);
     assert!(matches!(inspect(&p), Err(Error::NoDesktopEntry)));
-}
-
-#[test]
-fn failed_add_rolls_back_copied_file() {
-    let e = env();
-    let bytes = fixture::build_appimage(None, vec![Item::File("/AppRun", b"x".to_vec())]);
-    let p = write_image(&e, "nodesk.AppImage", bytes);
-    assert!(e.lib.add(&p, &AddOptions::default()).is_err());
-    let lib_dir = &e.lib.dirs.library_dir;
-    assert!(!lib_dir.exists() || fs::read_dir(lib_dir).unwrap().next().is_none());
-}
-
-#[test]
-fn the_version_falls_back_to_the_newest_appstream_release() {
-    let e = env();
-    let desktop = b"[Desktop Entry]\nType=Application\nName=Bar\nExec=bar\nIcon=icon\n".to_vec();
-    let metainfo = br#"<component><id>io.github.o.bar.desktop</id>
-        <releases><release version="0.4.1" date="2026-06-17"/><release version="0.4.2" date="2026-10-02"/></releases>
-        </component>"#
-        .to_vec();
-    let p = write_image(
-        &e,
-        "Bar.AppImage",
-        fixture::build_appimage(
-            None,
-            vec![
-                Item::File("/io.github.o.bar.desktop", desktop),
-                Item::File("/icon.png", fixture::png(64)),
-                Item::File("/usr/share/metainfo/io.github.o.bar.appdata.xml", metainfo),
-                // Another component's file does not count.
-                Item::File(
-                    "/usr/share/metainfo/plugin.metainfo.xml",
-                    br#"<component><id>plugin</id><releases><release version="9.0"/></releases></component>"#.to_vec(),
-                ),
-            ],
-        ),
-    );
-    assert_eq!(inspect(&p).unwrap().version.as_deref(), Some("0.4.2"));
-}
-
-#[test]
-fn an_entrys_own_arguments_never_become_options_of_run() {
-    let evil = DesktopEntry::parse(
-        "[Desktop Entry]\nType=Application\nName=E\nExec=AppRun --unsandboxed --profile x %U\n\
-         [Desktop Action a]\nExec=AppRun --print\n",
-    )
-    .unwrap();
-    let text = integrate_entry(
-        &evil,
-        "e",
-        Path::new("/usr/bin/appofholding"),
-        false,
-        &[],
-        None,
-        &[],
-    );
-    let d = DesktopEntry::parse(&text).unwrap();
-    let exec = desktop::split_exec(d.main("Exec").unwrap());
-    assert_eq!(
-        exec[1..],
-        ["run", "e", "--", "--unsandboxed", "--profile", "x", "%U"]
-    );
-    let action = desktop::split_exec(d.get("Desktop Action a", "Exec").unwrap());
-    assert_eq!(action[1..], ["run", "e", "--", "--print"]);
-}
-
-#[test]
-fn a_duplicate_exec_line_or_group_cannot_bypass_the_launcher() {
-    let entry = DesktopEntry::parse(
-        "[Desktop Entry]\nType=Application\nName=E\nExec=AppRun\nExec=AppRun --raw\n\
-         [Desktop Action a]\nExec=AppRun\n[Desktop Action a]\nExec=AppRun --raw\n\
-         [Desktop Entry]\nExec=AppRun --raw\n",
-    )
-    .unwrap();
-    let text = integrate_entry(
-        &entry,
-        "e",
-        Path::new("/usr/bin/appofholding"),
-        false,
-        &[],
-        None,
-        &[],
-    );
-    assert!(!text.contains("--raw"), "{text}");
-    for line in text.lines().filter(|l| l.starts_with("Exec=")) {
-        assert!(
-            line.starts_with("Exec=/usr/bin/appofholding run e --"),
-            "{text}"
-        );
-    }
-    assert_eq!(text.matches("[Desktop Entry]").count(), 1);
-    assert_eq!(text.matches("[Desktop Action a]").count(), 1);
-}
-
-#[test]
-fn percent_signs_keep_their_meaning() {
-    let entry = DesktopEntry::parse(
-        "[Desktop Entry]\nType=Application\nName=E\nExec=AppRun --zoom=100%% %F\n",
-    )
-    .unwrap();
-    let text = integrate_entry(
-        &entry,
-        "e",
-        Path::new("/usr/bin/appofholding"),
-        false,
-        &[],
-        None,
-        &[],
-    );
-    assert!(
-        text.contains("Exec=/usr/bin/appofholding run e -- --zoom=100%% %F\n"),
-        "{text}"
-    );
-}
-
-#[test]
-fn entries_written_before_the_fix_are_rewritten_on_open() {
-    let e = env();
-    let p = write_image(
-        &e,
-        "Foo.AppImage",
-        fixture::simple_appimage("Foo App", None),
-    );
-    let rec = e.lib.add(&p, &AddOptions::default()).unwrap();
-    // What an older version wrote, and the flag the database upgrade sets.
-    let old = "[Desktop Entry]\nType=Application\nName=Foo App\nExec=/x/appofholding run foo-app --flag %U\n";
-    fs::write(&rec.desktop_file, old).unwrap();
-    e.lib
-        .db
-        .set_setting("foo-app", REINTEGRATE, Some("1"))
-        .unwrap();
-    let lib = Library::open(e.lib.dirs.clone(), e.lib.exec_bin.clone()).unwrap();
-    let d = DesktopEntry::parse(&fs::read_to_string(&rec.desktop_file).unwrap()).unwrap();
-    let exec = desktop::split_exec(d.main("Exec").unwrap());
-    assert_eq!(&exec[1..], ["run", "foo-app", "--", "--flag", "%U"]);
-    assert!(lib.db.apps_with_setting(REINTEGRATE).unwrap().is_empty());
-}
-
-#[test]
-fn remove_deletes_kept_previous_versions() {
-    let e = env();
-    let p = write_image(
-        &e,
-        "Foo.AppImage",
-        fixture::simple_appimage("Foo App", None),
-    );
-    e.lib.add(&p, &AddOptions::default()).unwrap();
-    let versions = e.lib.dirs.versions_dir("foo-app");
-    fs::create_dir_all(&versions).unwrap();
-    fs::write(versions.join("Foo-1.0.AppImage"), b"old").unwrap();
-    e.lib.remove("foo-app", false).unwrap();
-    assert!(!versions.exists());
 }

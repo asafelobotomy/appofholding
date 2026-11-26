@@ -9,3 +9,7 @@ version = "1.0.1"
 files = ["crates/core/src/uq_diag.rs"]
 codes = "uq/diag/appofholding.toml"
 sources = ["crates"]
+
+[uq-loc]
+version = "1.0.0"
+files = ["scripts/check-loc.sh"]
