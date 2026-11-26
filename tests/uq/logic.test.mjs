@@ -11,7 +11,7 @@ import { parseToml } from "./toml-lite.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pageDir = join(here, "..", "..", "uq", "pages", "appimages");
-const L = loadLogic(join(pageDir, "logic.js"));
+const L = { ...loadLogic(join(pageDir, "logic.js")), ...loadLogic(join(pageDir, "progress.js")) };
 const manifest = parseToml(readFileSync(join(pageDir, "page.toml"), "utf8"));
 const qmlFiles = readdirSync(pageDir).filter((f) => f.endsWith(".qml"));
 const read = (f) => readFileSync(join(pageDir, f), "utf8");
@@ -22,7 +22,7 @@ const command = (id) => manifest.command.find((c) => c.id === id);
 test("the page uses uq_api 3 and every command it declares is used", () => {
   assert.equal(manifest.uq_api, 3);
   assert.equal(manifest.id, "appimages");
-  const qml = qmlFiles.map(read).join("\n") + read("logic.js");
+  const qml = qmlFiles.map(read).join("\n") + read("logic.js") + read("progress.js");
   const previews = new Set(manifest.command.map((c) => c.preview).filter(Boolean));
   for (const c of manifest.command) {
     if (previews.has(c.id)) continue; // run by uQ itself, before the confirmation
@@ -106,7 +106,7 @@ test("the page's words are plain", () => {
   const found = [];
   const literals = (line) => [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
   for (const f of qmlFiles) for (const line of read(f).split("\n")) if (/\btext:|title:|detail:|help:|label:|placeholderText:/.test(line)) found.push(...literals(line));
-  for (const line of read("logic.js").split("\n")) {
+  for (const line of (read("logic.js") + "\n" + read("progress.js")).split("\n")) {
     if (/^\s*\/\//.test(line) || /PATTERN|pattern|RegExp|\.test\(|case |\.event|ev\./.test(line)) continue;
     found.push(...literals(line).filter((s) => /^[A-Z].* /.test(s) || /…/.test(s)));
   }

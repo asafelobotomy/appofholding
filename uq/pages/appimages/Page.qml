@@ -11,6 +11,7 @@ import QtQuick.Layouts
 import org.uq.settings
 import "logic.js" as Logic
 
+import "progress.js" as Progress
 SettingsPage {
     id: page
 
@@ -22,7 +23,7 @@ SettingsPage {
     property var library: null
     /// The key of the row whose write or run is going, "" when none. One at a time.
     property string workingKey: ""
-    /// A check or update that is running or has just finished (Logic.reduce), and whose it is.
+    /// A check or update that is running or has just finished (Progress.reduce), and whose it is.
     property var progress: null
     property string progressKey: ""
     property bool streaming: false
@@ -120,11 +121,11 @@ SettingsPage {
             return;
         }
         page.notes = Logic.withNote(page.notes, key, null);
-        page.progress = Logic.startProgress(kind);
+        page.progress = Progress.startProgress(kind);
         page.progressKey = key;
         page.streaming = true;
         page.ctx.command.stream(command, args, event => {
-            page.progress = Logic.reduce(page.progress, event);
+            page.progress = Progress.reduce(page.progress, event);
         }, result => {
             page.streaming = false;
             if (Logic.isCancelled(result)) {
@@ -132,7 +133,7 @@ SettingsPage {
                 page.progressKey = "";
                 return;
             }
-            const problem = Logic.streamProblem(page.progress, result);
+            const problem = Progress.streamProblem(page.progress, result);
             if (problem !== "")
                 page.notes = Logic.withNote(page.notes, key, { message: problem, failed: true });
             page.reload();

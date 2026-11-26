@@ -1,22 +1,4 @@
 use super::*;
-use crate::fixture;
-use crate::library::AddOptions;
-use crate::paths::Dirs;
-use std::fs;
-
-struct Env {
-    tmp: tempfile::TempDir,
-    lib: Library,
-}
-
-fn env() -> Env {
-    let tmp = tempfile::tempdir().unwrap();
-    let lib = Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
-    let p = tmp.path().join("Foo.AppImage");
-    fs::write(&p, fixture::simple_appimage("Foo App", None)).unwrap();
-    lib.add(&p, &AddOptions::default()).unwrap();
-    Env { tmp, lib }
-}
 
 #[test]
 fn default_profile_always_exists_others_must_be_created() {
@@ -112,70 +94,6 @@ fn profile_names_and_contents_are_validated() {
             .set_profile("nope", "default", &Profile::default())
             .is_err()
     );
-}
-
-// ---- sandbox integration
-
-use crate::sandbox::{Bus, Level};
-use std::collections::BTreeMap;
-
-fn test_host(root: &Path) -> Host {
-    Host {
-        uid: 1000,
-        home: root.join("realhome"),
-        runtime_dir: root.join("run"),
-        env: BTreeMap::new(),
-        wayland_display: None,
-        x_display: None,
-        xauthority: None,
-        dbus_address: None,
-        exists: Box::new(|p| p.exists()),
-        list: Box::new(|_, _| vec![]),
-    }
-}
-
-fn ctx(root: &Path) -> LaunchCtx {
-    LaunchCtx {
-        host: Some(test_host(root)),
-        ..Default::default()
-    }
-}
-
-fn quiet_strict() -> Settings {
-    Settings {
-        gpu: false,
-        audio: false,
-        display: false,
-        bus: Bus::Off,
-        ..Settings::for_level(Level::Strict)
-    }
-}
-
-/// An app whose AppRun reports its environment, added to a fresh library.
-fn sandboxed_env() -> Env {
-    let tmp = tempfile::tempdir().unwrap();
-    let lib = Library::open(Dirs::with_root(tmp.path()), tmp.path().join("appofholding")).unwrap();
-    std::fs::create_dir_all(tmp.path().join("realhome")).unwrap();
-    let desktop = "[Desktop Entry]\nType=Application\nName=Probe\nExec=AppRun\n";
-    let apprun = "#!/bin/sh\necho \"HOME=$HOME\"\necho \"ARGS=$*\"\necho \"NET=$(grep -c : /proc/net/dev)\"\necho hi > \"$HOME/made\"\n";
-    let bytes = fixture::build_appimage(
-        None,
-        vec![
-            fixture::Item::File("/probe.desktop", desktop.as_bytes().to_vec()),
-            fixture::Item::File("/AppRun", apprun.as_bytes().to_vec()),
-        ],
-    );
-    let p = tmp.path().join("Probe.AppImage");
-    fs::write(&p, bytes).unwrap();
-    lib.add(&p, &AddOptions::default()).unwrap();
-    Env { tmp, lib }
-}
-
-fn bwrap_ok() -> bool {
-    std::process::Command::new("bwrap")
-        .args(crate::sandbox::probe_args())
-        .output()
-        .is_ok_and(|o| o.status.success())
 }
 
 #[test]
@@ -379,58 +297,4 @@ fn hooks_run_with_app_environment_and_report_failures() {
     assert!(e.lib.set_hook("foo-app", "post-update", "  ").is_err());
     assert_eq!(e.lib.hooks("foo-app").unwrap().len(), 2);
     assert!(e.lib.clear_hook("foo-app", "pre-update").unwrap());
-}
-
-#[test]
-fn a_hook_that_writes_a_lot_to_stderr_does_not_hang() {
-    let e = env();
-    // Far more than a pipe holds (64 KiB): without draining, the hook blocks until the timeout.
-    e.lib
-        .set_hook(
-            "foo-app",
-            "pre-update",
-            "head -c 1000000 /dev/zero | tr '\\0' x >&2; echo; echo last words >&2; exit 1",
-        )
-        .unwrap();
-    let start = Instant::now();
-    let err = e
-        .lib
-        .run_hook("foo-app", "pre-update")
-        .unwrap_err()
-        .to_string();
-    assert!(
-        start.elapsed() < Duration::from_secs(30),
-        "took {:?}",
-        start.elapsed()
-    );
-    assert!(
-        err.ends_with("last words"),
-        "{}",
-        &err[err.len().saturating_sub(80)..]
-    );
-}
-
-#[test]
-fn every_sandboxed_launch_gets_its_own_bus_socket() {
-    let e = env();
-    let mut s = Settings::for_level(Level::Standard);
-    s.bus = Bus::Filtered;
-    e.lib.set_sandbox("foo-app", &s).unwrap();
-    let socket = || {
-        let mut host = test_host(e.tmp.path());
-        host.dbus_address = Some("unix:path=/run/user/1000/bus".into());
-        let ctx = LaunchCtx {
-            host: Some(host),
-            ..Default::default()
-        };
-        let plan = e.lib.plan_launch("foo-app", None, &[], &ctx).unwrap();
-        plan.helper.unwrap().ready
-    };
-    let (a, b) = (socket(), socket());
-    assert_ne!(a, b);
-    let name = a.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(
-        name.starts_with(&format!("appofholding-foo-app-bus-{}-", std::process::id())),
-        "{name}"
-    );
 }

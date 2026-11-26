@@ -1,11 +1,10 @@
 // A check or an update that is running, or has just finished: a bar that follows the events
-// (Logic.reduce), the line saying what is happening, and what each app answered.
+// (Progress.reduce), the line saying what is happening, and what each app answered.
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.uq.settings
-import "logic.js" as Logic
-
+import "progress.js" as Progress
 ColumnLayout {
     id: view
 
@@ -19,12 +18,12 @@ ColumnLayout {
 
     QQC2.ProgressBar {
         visible: view.state !== null && !view.state.done
-        indeterminate: view.state !== null && Logic.fraction(view.state) < 0
-        value: view.state !== null ? Math.max(0, Logic.fraction(view.state)) : 0
+        indeterminate: view.state !== null && Progress.fraction(view.state) < 0
+        value: view.state !== null ? Math.max(0, Progress.fraction(view.state)) : 0
         Layout.fillWidth: true
     }
     UqLabel {
-        text: view.state !== null ? Logic.progressLine(view.state) : ""
+        text: view.state !== null ? Progress.progressLine(view.state) : ""
         wrapMode: Text.Wrap
         Layout.fillWidth: true
     }

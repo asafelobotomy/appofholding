@@ -27,6 +27,10 @@ ThemedPage {
     readonly property var desk: win.desk
     readonly property bool trayOn: desk.tray === true
     readonly property bool wayland: Qt.platform.pluginName.indexOf("wayland") >= 0
+    function openApplyAll() {
+        applyAll.open()
+    }
+
     function saveDesk(key, value) {
         var d = Object.assign({}, win.desk)
         delete d.error
@@ -133,207 +137,14 @@ ThemedPage {
         }
 
         // ================= Updates
-        ColumnLayout {
-            visible: tabs.currentIndex === 1
-            Layout.fillWidth: true
-            spacing: Kirigami.Units.largeSpacing
-
-            SectionCard {
-                id: scheduleCard
-                title: qsTr("Background checks")
-                iconName: "chronometer"
-                subtitle: qsTr("A system timer checks your apps even when appOFholding is closed. It installs updates for apps set to install automatically, and sends one notification per new version for apps set to “Tell me”.")
-
-                // Turning the timer on or off runs systemctl, so it is a task; the controls wait for
-                // its answer and then show what is really set up.
-                property bool busy: false
-                Connections {
-                    target: page.backend
-                    function onFinished(kind, id, ok, payload) {
-                        if (kind !== "scheduleInstall" && kind !== "scheduleRemove") return
-                        scheduleCard.busy = false
-                        if (!ok) page.win.showPassiveNotification(payload, "long")
-                        page.load()
-                        // A toggle or pick replaced the bindings; follow the real state again.
-                        sw.checked = Qt.binding(() => page.scheduled)
-                        interval.currentIndex = Qt.binding(() => Math.max(0, interval.keys.indexOf(page.scheduledInterval)))
-                    }
-                }
-
-                RowLayout {
-                    enabled: !scheduleCard.busy
-                    spacing: Kirigami.Units.largeSpacing
-                    QQC2.Switch {
-                        id: sw
-                        text: qsTr("Check in the background")
-                        checked: page.scheduled
-                        onToggled: {
-                            scheduleCard.busy = true
-                            if (checked) page.backend.start("scheduleInstall", "", interval.keys[interval.currentIndex], "", "")
-                            else page.backend.start("scheduleRemove", "", "", "", "")
-                        }
-                    }
-                    QQC2.ComboBox {
-                        id: interval
-                        readonly property var keys: ["hourly", "daily", "weekly"]
-                        model: [qsTr("Every hour"), qsTr("Every day"), qsTr("Every week")]
-                        currentIndex: Math.max(0, keys.indexOf(page.scheduledInterval))
-                        Accessible.name: qsTr("How often")
-                        onActivated: if (page.scheduled) {
-                            scheduleCard.busy = true
-                            page.backend.start("scheduleInstall", "", keys[currentIndex], "", "")
-                        }
-                    }
-                    QQC2.BusyIndicator {
-                        visible: scheduleCard.busy
-                        running: visible
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
-                    }
-                }
-            }
-
-            SectionCard {
-                title: qsTr("While appOFholding runs")
-                iconName: "notifications"
-                subtitle: qsTr("With the tray icon on, appOFholding also checks every few hours itself and announces each new version once, for apps set to “Tell me”.")
-                Check {
-                    text: qsTr("Notify me about new app versions")
-                    enabled: page.trayOn
-                    checked: page.desk.notifyUpdates === true
-                    onToggled: page.saveDesk("notifyUpdates", checked)
-                }
-                RowLayout {
-                    visible: !page.trayOn
-                    Layout.fillWidth: true
-                    QQC2.Label {
-                        text: qsTr("This needs the tray icon, which is off.")
-                        opacity: 0.7
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                    QQC2.Button {
-                        flat: true
-                        text: qsTr("Tray settings")
-                        icon.name: "go-next"
-                        onClicked: tabs.currentIndex = 3
-                    }
-                }
-            }
-
-            SectionCard {
-                title: qsTr("Going back")
-                iconName: "edit-undo"
-                subtitle: qsTr("Each update keeps the versions it replaces, so you can roll back if a new one misbehaves. Lowering the number deletes the extra ones now.")
-                RowLayout {
-                    spacing: Kirigami.Units.largeSpacing
-                    QQC2.Label { text: qsTr("Previous versions to keep:") }
-                    QQC2.SpinBox {
-                        id: keepBox
-                        from: 0
-                        to: page.defs.maxKeepVersions || 10
-                        value: page.defs.keepVersions !== undefined ? page.defs.keepVersions : 2
-                        editable: true
-                        Accessible.name: qsTr("Previous versions to keep")
-                        // Saved when the user stops changing it, so stepping 5 → 1 doesn't prune twice.
-                        onValueModified: keepTimer.restart()
-                        Timer {
-                            id: keepTimer
-                            interval: 800
-                            onTriggered: if (keepBox.value !== page.defs.keepVersions) page.saveDefault("keepVersions", keepBox.value)
-                        }
-                    }
-                }
-            }
+        UpdatesTab {
+            host: page
         }
 
         // ================= Defaults
-        ColumnLayout {
-            visible: tabs.currentIndex === 2
-            Layout.fillWidth: true
-            spacing: Kirigami.Units.largeSpacing
-
-            QQC2.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                opacity: 0.7
-                text: qsTr("What apps start with. Each app can still be changed on its own page, and these also apply to apps added from the command line.")
-            }
-
-            SectionCard {
-                title: qsTr("When a new version is found")
-                iconName: "preferences-system-time"
-                subtitle: qsTr("For apps whose update source is found from now on.")
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Kirigami.Units.smallSpacing
-                    QQC2.ComboBox {
-                        id: defPolicy
-                        Layout.fillWidth: true
-                        Layout.maximumWidth: Kirigami.Units.gridUnit * 20
-                        model: page.policyLabels
-                        currentIndex: Math.max(0, page.policyKeys.indexOf(page.defs.policy || "notify"))
-                        onActivated: (i) => page.saveDefault("policy", page.policyKeys[i])
-                        Accessible.name: qsTr("Default update policy")
-                    }
-                    QQC2.Button {
-                        text: qsTr("Apply to all apps…")
-                        icon.name: "edit-select-all"
-                        enabled: page.withSource > 0
-                        onClicked: applyAll.open()
-                    }
-                }
-            }
-
-            SectionCard {
-                title: qsTr("Antivirus")
-                iconName: "security-medium"
-                subtitle: qsTr("oysterAV only looks. A file it flags stays where it is; you decide in oysterAV what happens to it. Needs oysterAV installed.")
-                QQC2.ComboBox {
-                    id: defScan
-                    readonly property var keys: ["off", "warn", "block"]
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: Kirigami.Units.gridUnit * 20
-                    model: [qsTr("Off"), qsTr("Scan and warn me"), qsTr("Scan and stop a threat")]
-                    currentIndex: Math.max(0, keys.indexOf(page.defs.scan || "off"))
-                    onActivated: (i) => page.saveDefault("scan", keys[i])
-                    Accessible.name: qsTr("Scan AppImages with oysterAV")
-                }
-                QQC2.Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    opacity: 0.7
-                    text: defScan.currentIndex === 0 ? qsTr("AppImages are not scanned unless you ask.")
-                        : defScan.currentIndex === 1 ? qsTr("Each AppImage is scanned as it is added or updated, and the answer is kept. A threat is only reported.")
-                        : qsTr("As “Scan and warn me”, but an AppImage with a threat is not added or installed, and an update with one is thrown away.")
-                }
-            }
-
-            SectionCard {
-                title: qsTr("Sandbox")
-                iconName: "security-high"
-                subtitle: qsTr("For apps you add from now on. Apps already added keep their own sandbox.")
-                QQC2.ComboBox {
-                    id: defSandbox
-                    readonly property var keys: ["none", "standard", "strict"]
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: Kirigami.Units.gridUnit * 20
-                    model: [qsTr("Off"), qsTr("Standard"), qsTr("Strict")]
-                    currentIndex: Math.max(0, keys.indexOf(page.defs.sandbox || "none"))
-                    onActivated: (i) => page.saveDefault("sandbox", keys[i])
-                    Accessible.name: qsTr("Default sandbox")
-                }
-                QQC2.Label {
-                    Layout.fillWidth: true
-                    wrapMode: Text.Wrap
-                    opacity: 0.7
-                    text: [
-                        qsTr("New apps run like any other program."),
-                        qsTr("New apps work normally but can't see your files."),
-                        qsTr("New apps can't see your files, and have no network or sound.")
-                    ][defSandbox.currentIndex]
-                }
-            }
+        DefaultsTab {
+            id: defaultsTab
+            host: page
         }
 
         // ================= Tray (and startup)
@@ -478,7 +289,7 @@ ThemedPage {
         id: applyAll
         title: qsTr("Change every app?")
         subtitle: qsTr("All %n app(s) with an update source will be set to “%1”.", "", page.withSource)
-            .arg(page.policyLabels[defPolicy.currentIndex])
+            .arg(page.policyLabels[defaultsTab.policyIndex])
         standardButtons: Kirigami.Dialog.Cancel
         customFooterActions: [
             Kirigami.Action {
@@ -486,7 +297,7 @@ ThemedPage {
                 icon.name: "dialog-ok-apply"
                 onTriggered: {
                     applyAll.close()
-                    var r = Util.parse(page.backend.applyPolicyToAll(page.policyKeys[defPolicy.currentIndex]))
+                    var r = Util.parse(page.backend.applyPolicyToAll(page.policyKeys[defaultsTab.policyIndex]))
                     if (r.error) page.win.showPassiveNotification(r.error, "long")
                     else page.win.showPassiveNotification(qsTr("Changed %n app(s)", "", r.changed))
                     page.win.reload()
