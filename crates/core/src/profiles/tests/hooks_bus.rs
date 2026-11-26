@@ -48,8 +48,5 @@ fn every_sandboxed_launch_gets_its_own_bus_socket() {
     let (a, b) = (socket(), socket());
     assert_ne!(a, b);
     let name = a.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(
-        name.starts_with(&format!("appofholding-foo-app-bus-{}-", std::process::id())),
-        "{name}"
-    );
+    assert!(name.starts_with(&format!("appofholding-foo-app-bus-{}-", std::process::id())));
 }
