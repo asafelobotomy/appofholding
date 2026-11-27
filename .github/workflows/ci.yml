@@ -12,10 +12,15 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   deny:
     name: Dependency advisories
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2
@@ -25,6 +30,7 @@ jobs:
   # The library and the command line tool need no Qt.
   core:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -43,6 +49,7 @@ jobs:
   # The interface needs Qt 6 and Kirigami, which Arch packages as one set.
   gui:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     container: archlinux:latest
     steps:
       - name: Install toolchain
@@ -64,6 +71,7 @@ jobs:
   uq:
     name: uQ integration
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       # The uQ release whose `uqctl` checks the page (uq_api 3 is in every release since v0.3.0).
       UQ_TAG: v0.3.37
